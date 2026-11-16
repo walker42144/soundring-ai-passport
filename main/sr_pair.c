@@ -196,6 +196,7 @@ static void reply_ok(const char *cmd, const char *note) {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "cmd", cmd ? cmd : "");
     cJSON_AddBoolToObject(root, "wifi", s_callbacks && s_callbacks->on_wifi != NULL);
+    cJSON_AddBoolToObject(root, "wifi_multi", s_callbacks && s_callbacks->on_wifi_save != NULL);
     cJSON_AddStringToObject(root, "note", note ? note : "");
     char *json = cJSON_PrintUnformatted(root);
     write_line("SROK", json);
@@ -258,7 +259,7 @@ static void handle_secure(sr_config_t *dummy, const cJSON *root, const char *cmd
     bool ok = false;
     char plain[SR_PAIR_PLAIN_MAX + 1];
 
-    if (strcmp(cmd, "wifi") == 0) {
+    if (strcmp(cmd, "wifi") == 0 || strcmp(cmd, "wifi_save") == 0) {
         if (!decrypt_field(root, aad, plain, sizeof(plain))) {
             reply_error(cmd, "bad_cipher");
             return;
@@ -273,8 +274,10 @@ static void handle_secure(sr_config_t *dummy, const cJSON *root, const char *cmd
             if (cJSON_IsString(pass) && pass->valuestring) {
                 sr_utf8_ellipsis(pass->valuestring, pass_text, sizeof(pass_text));
             }
-            ok = s_callbacks && s_callbacks->on_wifi &&
-                 s_callbacks->on_wifi(ssid->valuestring, pass_text, s_callbacks->ctx);
+            if (s_callbacks && strcmp(cmd, "wifi_save") == 0)
+                ok = s_callbacks->on_wifi_save && s_callbacks->on_wifi_save(ssid->valuestring, pass_text, s_callbacks->ctx);
+            else if (s_callbacks)
+                ok = s_callbacks->on_wifi && s_callbacks->on_wifi(ssid->valuestring, pass_text, s_callbacks->ctx);
         }
         cJSON_Delete(payload_root);
         if (!ok) {
@@ -333,7 +336,7 @@ static void handle_line(char *line) {
     const char *cmd = cmd_item->valuestring;
     if (strcmp(cmd, "hello") == 0) {
         handle_hello(root);
-    } else if (strcmp(cmd, "wifi") == 0 || strcmp(cmd, "auth") == 0) {
+    } else if (strcmp(cmd, "wifi") == 0 || strcmp(cmd, "wifi_save") == 0 || strcmp(cmd, "auth") == 0) {
         handle_secure(NULL, root, cmd);
     } else if (strcmp(cmd, "status") == 0) {
         // 配置工具用它确认 Wi-Fi 是否真的连上，避免“写入成功但没联网”被当成成功。

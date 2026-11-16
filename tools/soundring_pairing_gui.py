@@ -62,7 +62,7 @@ def exchange(port, obj, cmd, timeout=12):
                 "need_hello": "配对会话已结束，请在设备上重新进入配对页面。",
                 "bad_sequence": "配对会话已使用，请退出设备配对页面后重新进入。",
                 "bad_cipher": "配对信息已过期，请重新生成配对码。",
-                "wifi_rejected": "设备未能保存 Wi-Fi 信息，请检查名称和密码长度。",
+                "wifi_rejected": "设备未能保存 Wi-Fi；请检查名称、密码或已达 4 个网络上限。",
                 "auth_rejected": "设备未能保存 Spotify 授权，请重新尝试。",
                 "line_too_long": "授权信息超过固件可接收的长度。",
             }
@@ -224,6 +224,7 @@ class App:
         self.code = tk.StringVar()
         self.ssid = tk.StringVar()
         self.password = tk.StringVar()
+        self.extra_wifi = [(tk.StringVar(), tk.StringVar()) for _ in range(3)]
         self.client = tk.StringVar()
         self.redirect = tk.StringVar()
         self.want_wifi = tk.BooleanVar(value=True)
@@ -286,6 +287,7 @@ class App:
         self.entry(card2, self.ssid, False)
         self.label(card2, "Wi-Fi 密码（输入时隐藏；开放网络留空）", 9, SUB, pady=2)
         self.entry(card2, self.password, True)
+        tk.Button(card2, text="添加备用 Wi-Fi（最多 3 组）", command=self.edit_extra_wifi).pack(anchor="w", pady=(5, 0))
         card3 = tk.Frame(outer, bg=PANEL, padx=18, pady=12)
         card3.pack(fill="x", pady=8)
         tk.Checkbutton(
@@ -344,6 +346,21 @@ class App:
         e.pack(fill="x", ipady=4)
         return e
 
+    def edit_extra_wifi(self):
+        popup = tk.Toplevel(self.w)
+        popup.title("备用 Wi-Fi")
+        popup.configure(bg=BG)
+        popup.transient(self.w)
+        frame = tk.Frame(popup, bg=BG, padx=20, pady=12)
+        frame.pack(fill="both", expand=True)
+        self.label(frame, "留空的条目不会写入设备；仅支持 2.4 GHz。", 9, SUB)
+        for i, (ssid, password) in enumerate(self.extra_wifi, 1):
+            self.label(frame, f"备用网络 {i} 名称", 9, SUB, pady=2)
+            self.entry(frame, ssid, False)
+            self.label(frame, "密码（开放网络留空）", 9, SUB, pady=2)
+            self.entry(frame, password, True)
+        tk.Button(frame, text="完成", command=popup.destroy).pack(pady=8)
+
     def refresh_ports(self):
         ports = discover()
         self.ports["values"] = ports
@@ -365,6 +382,7 @@ class App:
             "auth": self.want_auth.get(),
             "ssid": self.ssid.get(),
             "password": self.password.get(),
+            "extra_wifi": [(s.get(), p.get()) for s, p in self.extra_wifi],
             "client": self.client.get().strip(),
             "redirect": self.redirect.get().strip(),
         }
@@ -384,9 +402,12 @@ class App:
             self.status.config(text="请至少选择一个需要配置的项目。", fg="#ffb4a9")
             return
         if cfg["wifi"] and (
-            not cfg["ssid"]
+            (not cfg["ssid"] and not any(s for s, _ in cfg["extra_wifi"]))
             or len(cfg["ssid"].encode()) > 32
             or len(cfg["password"].encode()) > 64
+            or (not cfg["ssid"] and cfg["password"])
+            or any((not s and p) or len(s.encode()) > 32 or len(p.encode()) > 64
+                   for s, p in cfg["extra_wifi"])
         ):
             self.status.config(
                 text="请填写 Wi-Fi 名称（最多 32 字节）和有效密码。", fg="#ffb4a9"
@@ -426,7 +447,7 @@ class App:
             if frame.get("v") != 1 or len(nonce) != 16:
                 raise PairError("设备返回了无法识别的配对信息。")
             key = hashlib.pbkdf2_hmac("sha256", cfg["code"].encode(), nonce, 20000, 32)
-            exchange(
+            hello = exchange(
                 port,
                 {
                     "v": 1,
@@ -437,26 +458,28 @@ class App:
             )
             seq = 0
             if cfg["wifi"]:
-                self.report("正在发送 Wi-Fi 配置并等待设备联网…")
-                seq += 1
-                secure(
-                    port,
-                    key,
-                    "wifi",
-                    seq,
-                    {"ssid": cfg["ssid"], "pass": cfg["password"]},
-                )
-                connected = False
-                for _ in range(20):
-                    time.sleep(1.5)
-                    s = status(port)
-                    if s.get("connected") == "1":
-                        connected = True
-                        break
-                if not connected:
-                    raise PairError(
-                        "配置已发送，但设备在 30 秒内未取得网络地址。请检查 2.4 GHz 网络、密码和信号。"
-                    )
+                extras = [(s, p) for s, p in cfg["extra_wifi"] if s]
+                if extras and not hello.get("wifi_multi"):
+                    raise PairError("设备固件不支持保存多个 Wi-Fi，请先更新固件。")
+                if cfg["ssid"]:
+                    self.report("正在发送当前 Wi-Fi 配置…")
+                    seq += 1
+                    secure(port, key, "wifi", seq, {"ssid": cfg["ssid"], "pass": cfg["password"]})
+                for ssid, password in extras:
+                    self.report("正在安全保存备用 Wi-Fi…")
+                    seq += 1
+                    secure(port, key, "wifi_save", seq, {"ssid": ssid, "pass": password})
+                if cfg["ssid"]:
+                    self.report("正在等待设备联网…")
+                    connected = False
+                    for _ in range(20):
+                        time.sleep(1.5)
+                        s = status(port)
+                        if s.get("connected") == "1":
+                            connected = True
+                            break
+                    if not connected:
+                        raise PairError("配置已发送，但设备在 30 秒内未取得网络地址。请检查 2.4 GHz 网络、密码和信号。")
             if cfg["auth"]:
                 self.report("请在浏览器中登录 Spotify 并同意授权…")
                 token = spotify(cfg["client"], cfg["redirect"])

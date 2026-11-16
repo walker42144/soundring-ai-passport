@@ -160,7 +160,7 @@ static lv_obj_t *progress(lv_obj_t *p, int x, int y, int w) {
 static bool is_list(sr_screen_t s) {
     return s == SR_SC_MENU || s == SR_SC_LIBRARY || s == SR_SC_CONTROLS || s == SR_SC_PLAYLISTS ||
            s == SR_SC_TRACKS || s == SR_SC_DEVICES || s == SR_SC_QUEUE || s == SR_SC_RECENT ||
-           s == SR_SC_SETTINGS;
+           s == SR_SC_SETTINGS || s == SR_SC_WIFI;
 }
 static const char *state(const sr_view_t *v) {
     if (!v->connected)

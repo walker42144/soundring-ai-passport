@@ -26,6 +26,7 @@ typedef enum {
     SR_SC_BRIGHTNESS,
     SR_SC_IMMERSIVE,
     SR_SC_STATUS,
+    SR_SC_WIFI,
 } sr_screen_t;
 
 #define SR_VIEW_ROWS 6

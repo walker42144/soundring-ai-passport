@@ -10,7 +10,7 @@
 
 - 首页显示歌曲、歌手、封面和播放进度，支持播放控制；双击确定收藏或取消收藏。
 - 音乐库中的歌单、最近播放和播放队列；最近播放与队列最多显示 13 条。
-- Windows 配对工具可一次完成 Wi-Fi 配置和 Spotify 授权，也可分别更新。
+- Windows 配对工具可配置 Spotify 授权和最多 4 组 Wi-Fi；可只添加备用网络，之后在设备设置中手动切换。
 - 四种同步速度：自动、省电、标准和快速。自动模式在亮屏时采用快速同步、息屏后约每分钟同步一次；快速模式在播放中约每 2 秒、暂停或等待播放时约每 3 秒查询一次；Spotify 限流和失败退避仍然生效，耗电也会增加。
 - 可分别设置屏幕调暗和自动熄灭时间，也可开启屏幕常亮并自行调整亮度。常亮时仍按相同时间调暗；变暗或熄屏后，第一次按键只恢复屏幕，不执行播放操作。
 - 双击下一首进入沉浸模式，双击上一首查看设备状态；长按确定返回首页。状态页显示电池、内存、网络、亮度、运行时长及授权和同步信息，不估算剩余续航。
@@ -39,7 +39,7 @@ python -m esptool --chip esp32c3 --port COMX write_flash 0x0 firmware/soundring-
 
 1. 在 [Spotify 开发者后台](https://developer.spotify.com/dashboard)使用自己的账号和应用。填写或登记符合 [Spotify 回调地址规则](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri)的本机 IPv4 回调地址，记下 Client ID 和完整回调地址。本仓库不提供任何个人 Client ID 或回调地址。
 2. 此工具使用 PKCE，不需要 Client Secret。Spotify 开发模式的账号、Premium 和可读歌单等限制以 [官方迁移指南](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide)为准。
-3. Windows 安装带 Tkinter 的 Python，运行：
+3. Windows 可从 [最新发布页](https://github.com/walker42144/soundring-ai-passport/releases/latest)下载 `soundring-pairing-windows.exe` 直接运行。也可安装带 Tkinter 的 Python，使用源码运行：
 
 ```powershell
 python -m pip install -r requirements-pairing.txt
@@ -48,7 +48,8 @@ python tools/soundring_pairing_gui.py
 
 4. USB 连接设备，在设备进入 **设置 → 电脑配对**。在配对中心选择设备串口，输入设备显示的 8 位配对码。
 5. 需要配网时勾选“配置 Wi-Fi”，输入自己的 **2.4 GHz** Wi-Fi 名称和密码。需要授权时勾选“授权 Spotify”，输入自己的 Client ID 和开发者后台登记的完整回调地址；两项可同时或分别配置。
-6. 点击“开始配对”，按浏览器提示登录并授权，等待工具提示配置完成。若只更新 Wi-Fi 或只更新授权，可取消另一项勾选。
+6. 如需备用网络，点击“添加备用 Wi-Fi”，最多填写 3 组备用网络；原设备已保存的网络也占一个位置，设备总共最多保存 4 组。只添加备用网络时可将当前网络名称留空。
+7. 点击“开始配对”，按浏览器提示登录并授权，等待工具提示配置完成。若只更新 Wi-Fi 或只更新授权，可取消另一项勾选。之后在设备“设置 → Wi-Fi”选择已保存网络，按确定连接。此版本为手动切换，暂不支持单独删除已保存的网络。
 
 配对中心使用本机回调监听器接收授权结果；回调地址需有端口和路径，并与应用登记内容匹配。不要把密码、配对码或令牌发给别人。备选 PowerShell 7 工具：`pwsh -File tools/soundring-setup.ps1`，按照提示输入所需信息；`-SelfTest` 只运行本地加密自检。
 
@@ -66,6 +67,7 @@ python tools/soundring_pairing_gui.py
 | 设置 | “屏幕常亮”开启后不自动熄屏，但仍遵循调暗时间；“亮度”可手动调整 |
 | 暗屏／息屏 | 第一次按任意功能键仅恢复亮度／点亮屏幕，再次按键才操作 |
 | 设置 | “同步速度”按确定切换自动、省电、标准、快速；选择会保存 |
+| 设置 | “Wi-Fi”查看已保存网络，选择后按确定连接；长按确定返回 |
 
 ## 从源码构建
 

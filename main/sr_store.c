@@ -5,6 +5,7 @@
 #include "nvs.h"
 
 #include <string.h>
+#include <stdio.h>
 
 static const char *TAG = "sr_store";
 static const char *k_ns = "soundring";
@@ -72,14 +73,63 @@ void sr_store_load(sr_config_t *cfg) {
     nvs_close(handle);
 }
 
-esp_err_t sr_store_save_network(const char *ssid, const char *pass) {
+size_t sr_store_list_networks(sr_wifi_entry_t *out, size_t cap) {
+    if (!out || !cap) return 0;
+    const nvs_handle_t handle = open_ns(NVS_READONLY);
+    if (!handle) return 0;
+    size_t count = 0;
+    for (int i = 0; i < SR_WIFI_MAX && count < cap; ++i) {
+        char key[16];
+        snprintf(key, sizeof(key), "wifi%d", i);
+        read_str(handle, key, out[count].ssid, sizeof(out[count].ssid));
+        if (!out[count].ssid[0]) continue;
+        snprintf(key, sizeof(key), "pass%d", i);
+        read_str(handle, key, out[count].pass, sizeof(out[count].pass));
+        ++count;
+    }
+    sr_wifi_entry_t legacy = {0};
+    read_str(handle, "ssid", legacy.ssid, sizeof(legacy.ssid));
+    read_str(handle, "wpass", legacy.pass, sizeof(legacy.pass));
+    bool found = false;
+    for (size_t i = 0; i < count; ++i) if (!strcmp(out[i].ssid, legacy.ssid)) found = true;
+    if (legacy.ssid[0] && !found && count < cap) out[count++] = legacy;
+    nvs_close(handle);
+    return count;
+}
+
+esp_err_t sr_store_add_network(const char *ssid, const char *pass, bool activate) {
+    if (!ssid || !*ssid || strlen(ssid) >= SR_SSID_CAP || (pass && strlen(pass) >= SR_PASS_CAP))
+        return ESP_ERR_INVALID_ARG;
+    sr_wifi_entry_t list[SR_WIFI_MAX] = {0};
+    size_t count = sr_store_list_networks(list, SR_WIFI_MAX);
+    size_t slot = 0;
+    while (slot < count && strcmp(list[slot].ssid, ssid)) ++slot;
+    if (slot == SR_WIFI_MAX) return ESP_FAIL;
+    snprintf(list[slot].ssid, sizeof(list[slot].ssid), "%s", ssid);
+    snprintf(list[slot].pass, sizeof(list[slot].pass), "%s", pass ? pass : "");
+    if (slot == count) ++count;
     const nvs_handle_t handle = open_ns(NVS_READWRITE);
     if (!handle) return ESP_FAIL;
-    esp_err_t err = nvs_set_str(handle, "ssid", ssid ? ssid : "");
-    if (err == ESP_OK) err = nvs_set_str(handle, "wpass", pass ? pass : "");
+    char active_ssid[SR_SSID_CAP];
+    read_str(handle, "ssid", active_ssid, sizeof(active_ssid));
+    esp_err_t err = ESP_OK;
+    for (size_t i = 0; i < count && err == ESP_OK; ++i) {
+        char key[16];
+        snprintf(key, sizeof(key), "wifi%u", (unsigned)i);
+        err = nvs_set_str(handle, key, list[i].ssid);
+        snprintf(key, sizeof(key), "pass%u", (unsigned)i);
+        if (err == ESP_OK) err = nvs_set_str(handle, key, list[i].pass);
+    }
+    if (activate && err == ESP_OK) err = nvs_set_str(handle, "ssid", ssid);
+    if ((activate || !strcmp(active_ssid, ssid)) && err == ESP_OK)
+        err = nvs_set_str(handle, "wpass", pass ? pass : "");
     if (err == ESP_OK) err = nvs_commit(handle);
     nvs_close(handle);
     return err;
+}
+
+esp_err_t sr_store_save_network(const char *ssid, const char *pass) {
+    return sr_store_add_network(ssid, pass, true);
 }
 
 esp_err_t sr_store_save_auth(const char *client_id, const char *access, const char *refresh,

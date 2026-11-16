@@ -21,6 +21,18 @@ static void test_heap_percent(void) {
     check(sr_heap_used_percent(100, 0) == 100, "全占用");
 }
 
+static void test_list_identity(void) {
+    check(sr_playlist_id_valid("3cEYpjA9oz9GiPac4AsH4n"), "base62 playlist id");
+    check(!sr_playlist_id_valid(NULL) && !sr_playlist_id_valid(""), "missing id");
+    check(!sr_playlist_id_valid("spotify:playlist:3cEYpjA9oz9GiPac4AsH4n"), "URI rejected");
+    check(!sr_playlist_id_valid("id/other?x=1") && !sr_playlist_id_valid("id space"), "unsafe path rejected");
+    check(!sr_playlist_id_valid("123456789012345678901234567890123"), "long id rejected");
+    check(sr_list_request_current(3, 3, 1, 1, 6, 6), "current list response accepted");
+    check(!sr_list_request_current(2, 3, 1, 1, 6, 6), "old response rejected after return");
+    check(!sr_list_request_current(3, 3, 1, 2, 6, 6), "old screen rejected");
+    check(!sr_list_request_current(3, 3, 1, 1, 0, 6), "old page rejected");
+}
+
 static void test_gate(void) {
     sr_gate_t gate;
     sr_gate_init(&gate, 800000);
@@ -203,6 +215,7 @@ static void test_errors(void) {
 }
 
 int main(void) {
+    test_list_identity();
     test_heap_percent();
     test_gate();
     test_retry_after();

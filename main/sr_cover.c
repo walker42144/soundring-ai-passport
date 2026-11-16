@@ -3,6 +3,7 @@
 
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_spiffs.h"
 #include "jpeg_decoder.h"
@@ -20,7 +21,7 @@ static const char *k_mount = "/covers";
 static const size_t k_cache_bytes = 512 * 1024;
 static const int k_cache_files = 8;
 
-// 160x160 RGB565：静态分配，避免与 TLS/JSON 抢堆形成碎片。
+// RGB565：静态分配，避免与 TLS/JSON 抢堆形成碎片。
 static uint16_t s_pixels[SR_COVER_MAX_DIM * SR_COVER_MAX_DIM];
 static uint16_t s_width;
 static uint16_t s_height;
@@ -186,6 +187,10 @@ static void save_cached(const char *url, const uint8_t *data, size_t length) {
 }
 
 static bool download(const char *url) {
+    ESP_LOGI(TAG, "download before: heap=%u largest=%u min=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
     esp_http_client_config_t config = {
         .url = url,
         .timeout_ms = 8000,
@@ -216,6 +221,10 @@ static bool download(const char *url) {
         esp_http_client_cleanup(client);
         return false;
     }
+    ESP_LOGI(TAG, "download allocated: heap=%u largest=%u min=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
     size_t used = 0;
     bool failed = false;
     for (;;) {

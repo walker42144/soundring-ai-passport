@@ -403,7 +403,7 @@ bool sr_sp_load_playlists(sr_spotify_t *sp, int offset, int limit, sr_list_t *ou
             snprintf(subtitle, sizeof(subtitle), "%s", owner_text[0] ? owner_text : "歌单");
         }
         sr_utf8_ellipsis(subtitle, item->subtitle, sizeof(item->subtitle));
-        item->actionable = item->uri[0] && item->context_uri[0];
+        item->actionable = item->uri[0] && sr_playlist_id_valid(item->context_uri);
         item->position = -1;
         ++out->count;
     }
@@ -417,7 +417,7 @@ bool sr_sp_load_playlists(sr_spotify_t *sp, int offset, int limit, sr_list_t *ou
 bool sr_sp_load_playlist_items(sr_spotify_t *sp, const char *playlist_id, const char *playlist_uri,
                                int offset, int limit, sr_list_t *out, sr_result_t *result) {
     memset(out, 0, sizeof(*out));
-    if (!playlist_id || !*playlist_id) {
+    if (!sr_playlist_id_valid(playlist_id)) {
         set_result(result, 1, "歌单不可用");
         return false;
     }

@@ -28,7 +28,7 @@
 
 static const char *TAG = "sr_app";
 #define SR_PAGE 6
-#define SR_SETTINGS_COUNT 10
+#define SR_SETTINGS_COUNT 11
 #define SR_NAV_DEPTH 4
 #define SR_JOB_DEPTH 6
 // 首页进度 tick：只重绘文本与进度条，不发请求。播放中 1s，暂停 5s。
@@ -51,6 +51,7 @@ typedef enum {
     JOB_COMMAND,
     JOB_LIST,
     JOB_COVER,
+    JOB_WIFI_SWITCH,
     JOB_LIKE_CHECK,
     JOB_LIKE_SET,
 } job_kind_t;
@@ -59,6 +60,7 @@ typedef struct {
     uint8_t kind;
     uint8_t arg;
     int value;
+    uint32_t generation;
     // 装封面 URL（最长 SR_COVER_URL_CAP）；命令/列表 job 里的 URI 只用到前 80 字节。
     char text[SR_COVER_URL_CAP];
     char extra[64];
@@ -69,6 +71,8 @@ static sr_spotify_t s_sp;
 static sr_playback_t s_pb;
 static sr_progress_t s_progress;
 static sr_list_t s_list;
+static sr_wifi_entry_t s_wifi_entries[SR_WIFI_MAX];
+static size_t s_wifi_count;
 static sr_screen_t s_screen = SR_SC_HOME;
 static int s_sel;
 static int s_offset;
@@ -96,6 +100,7 @@ static nav_entry_t s_nav[SR_NAV_DEPTH];
 static int s_nav_depth;
 
 static QueueHandle_t s_jobs;
+static uint32_t s_list_generation;
 static SemaphoreHandle_t s_mutex;
 static sr_gate_t s_gate;
 static int64_t s_next_poll_us;
@@ -134,6 +139,11 @@ static void toast_locked(const char *text, bool error) {
 static bool enqueue(uint8_t kind, uint8_t arg, int value, const char *text, const char *extra) {
     if (!s_jobs) return false;
     sr_job_t job = {.kind = kind, .arg = arg, .value = value};
+    if (kind == JOB_LIST) {
+        job.generation = ++s_list_generation;
+        // Never expose items from a previous page while the replacement loads.
+        memset(&s_list, 0, sizeof(s_list));
+    }
     if (text) sr_utf8_ellipsis(text, job.text, sizeof(job.text));
     if (extra) sr_utf8_ellipsis(extra, job.extra, sizeof(job.extra));
     const BaseType_t queued = kind == JOB_LIST ? xQueueSendToFront(s_jobs, &job, 0)
@@ -282,7 +292,9 @@ static void fill_settings_list(void) {
     sr_utf8_ellipsis("使用说明", s_list.items[7].title, sizeof(s_list.items[7].title));
     sr_utf8_ellipsis("按键", s_list.items[7].subtitle, sizeof(s_list.items[7].subtitle));
 
-    sr_utf8_ellipsis("返回", s_list.items[9].title, sizeof(s_list.items[9].title));
+    sr_utf8_ellipsis("Wi-Fi", s_list.items[9].title, sizeof(s_list.items[9].title));
+    sr_utf8_ellipsis("选择网络", s_list.items[9].subtitle, sizeof(s_list.items[9].subtitle));
+    sr_utf8_ellipsis("返回", s_list.items[10].title, sizeof(s_list.items[10].title));
     sr_utf8_ellipsis("屏幕常亮", s_list.items[8].title, sizeof(s_list.items[8].title));
     sr_utf8_ellipsis(s_cfg.always_on ? "开启" : "关闭", s_list.items[8].subtitle, sizeof(s_list.items[8].subtitle));
     for (int i = 0; i < SR_SETTINGS_COUNT; ++i) {
@@ -293,6 +305,21 @@ static void fill_settings_list(void) {
     s_list.total = SR_SETTINGS_COUNT;
     s_total = 0;
     s_offset = 0;
+}
+
+static void fill_wifi_list(void) {
+    memset(&s_list, 0, sizeof(s_list));
+    for (size_t i = 0; i < s_wifi_count && i < SR_LIST_MAX; ++i) {
+        sr_item_t *item = &s_list.items[i];
+        sr_utf8_ellipsis(s_wifi_entries[i].ssid, item->title, sizeof(item->title));
+        sr_utf8_ellipsis(strcmp(s_cfg.wifi_ssid, s_wifi_entries[i].ssid) == 0 ? "已选择" : "按确定连接",
+                         item->subtitle, sizeof(item->subtitle));
+        item->position = (int)i;
+        item->actionable = true;
+    }
+    s_list.count = (int)s_wifi_count;
+    s_list.total = (int)s_wifi_count;
+    s_total = 0;
 }
 
 static void push_current_locked(void) {
@@ -326,6 +353,10 @@ static void enter_screen_locked(sr_screen_t screen, const char *title, int offse
     }
     if (screen == SR_SC_SETTINGS) {
         fill_settings_list();
+        return;
+    }
+    if (screen == SR_SC_WIFI) {
+        fill_wifi_list();
         return;
     }
     if (screen == SR_SC_PAIRING) {
@@ -376,6 +407,8 @@ static void go_back_locked(void) {
         fill_menu_list();
     } else if (s_screen == SR_SC_SETTINGS) {
         fill_settings_list();
+    } else if (s_screen == SR_SC_WIFI) {
+        fill_wifi_list();
     } else if (s_screen == SR_SC_PLAYLISTS || s_screen == SR_SC_TRACKS ||
                s_screen == SR_SC_DEVICES || s_screen == SR_SC_QUEUE || s_screen == SR_SC_RECENT) {
         enqueue(JOB_LIST, (uint8_t)s_screen, s_offset, NULL, NULL);
@@ -528,6 +561,10 @@ static void settings_activate_locked(void) {
             s_cfg.always_on = !s_cfg.always_on;
             (void)sr_store_save_settings(&s_cfg);
             break;
+        case 9:
+            enter_screen_locked(SR_SC_WIFI, "Wi-Fi", 0);
+            if (!s_wifi_count) toast_locked("请先电脑配对", false);
+            break;
         default:
             go_back_locked();
             break;
@@ -604,6 +641,10 @@ static void list_activate_locked(void) {
         }
         send_command_locked(SR_CMD_PLAY_URI, 0, item->uri, s_pb.device_id);
         toast_locked("正在开始播放", false);
+    } else if (s_screen == SR_SC_WIFI) {
+        if (item->position >= 0 && (size_t)item->position < s_wifi_count &&
+            enqueue(JOB_WIFI_SWITCH, 0, item->position, NULL, NULL))
+            toast_locked("正在连接", false);
     } else if (s_screen == SR_SC_QUEUE) {
         enqueue(JOB_LIST, (uint8_t)SR_SC_QUEUE, 0, NULL, NULL);
         toast_locked("已刷新队列", false);
@@ -616,7 +657,7 @@ static void list_activate_locked(void) {
 }
 
 static void move_selection_locked(int delta) {
-    if (is_navigation_screen(s_screen) || s_screen == SR_SC_SETTINGS) {
+    if (is_navigation_screen(s_screen) || s_screen == SR_SC_SETTINGS || s_screen == SR_SC_WIFI) {
         const int count = s_list.count;
         if (count == 0) return;
         s_sel = (s_sel + (delta % count) + count) % count;
@@ -632,7 +673,7 @@ static void move_selection_locked(int delta) {
 }
 
 static void page_move_locked(int direction) {
-    if (is_navigation_screen(s_screen) || s_screen == SR_SC_SETTINGS) {
+    if (is_navigation_screen(s_screen) || s_screen == SR_SC_SETTINGS || s_screen == SR_SC_WIFI) {
         move_selection_locked(direction * 4);
         return;
     }
@@ -909,19 +950,18 @@ static void do_poll(void) {
     xSemaphoreGiveRecursive(s_mutex);
 }
 
-static void do_list(uint8_t screen, int offset) {
+static void do_list(uint8_t screen, int offset, uint32_t generation) {
     char playlist_id[48] = "";
     char playlist_uri[80] = "";
     if (xSemaphoreTakeRecursive(s_mutex, pdMS_TO_TICKS(300)) != pdTRUE) return;
-    bool stale = s_screen != (sr_screen_t)screen || s_offset != offset;
-    xSemaphoreGiveRecursive(s_mutex);
-    if (stale) return;
-    if (screen == SR_SC_TRACKS) {
-        if (xSemaphoreTakeRecursive(s_mutex, pdMS_TO_TICKS(300)) != pdTRUE) return;
+    bool stale = !sr_list_request_current(generation, s_list_generation, screen, s_screen,
+                                          offset, s_offset);
+    if (!stale && screen == SR_SC_TRACKS) {
         sr_utf8_ellipsis(s_playlist_id, playlist_id, sizeof(playlist_id));
         sr_utf8_ellipsis(s_playlist_uri, playlist_uri, sizeof(playlist_uri));
-        xSemaphoreGiveRecursive(s_mutex);
     }
+    xSemaphoreGiveRecursive(s_mutex);
+    if (stale) return;
 
     // worker 单线程，列表缓冲放 .bss：sr_list_t 约 4.2 KB，留在栈上会把工作栈吃掉一半，
     // 而后面还要走 sp_call → sr_http_do → mbedTLS 完整握手。每次进入都 memset，避免残留上一页。
@@ -929,6 +969,7 @@ static void do_list(uint8_t screen, int offset) {
     sr_result_t result;
     memset(&fresh, 0, sizeof(fresh));
     bool ok = false;
+    log_heap("列表请求前");
     if (screen == SR_SC_PLAYLISTS) {
         ok = sr_sp_load_playlists(&s_sp, offset, SR_PAGE, &fresh, &result);
     } else if (screen == SR_SC_TRACKS) {
@@ -944,9 +985,11 @@ static void do_list(uint8_t screen, int offset) {
         return;
     }
 
+    log_heap("列表请求后");
     if (xSemaphoreTakeRecursive(s_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
     // 页面可能已切走：只在仍是同一页时应用。
-    if (s_screen != (sr_screen_t)screen || s_offset != offset) {
+    if (!sr_list_request_current(generation, s_list_generation, screen, s_screen,
+                                 offset, s_offset)) {
         xSemaphoreGiveRecursive(s_mutex);
         return;
     }
@@ -1209,8 +1252,31 @@ static void worker_task(void *arg) {
                 do_command(job.arg, job.value, job.text, job.extra);
                 break;
             case JOB_LIST:
-                do_list(job.arg, job.value);
+                do_list(job.arg, job.value, job.generation);
                 break;
+            case JOB_WIFI_SWITCH: {
+                sr_wifi_entry_t selected = {0};
+                bool saved = false;
+                if (xSemaphoreTakeRecursive(s_mutex, portMAX_DELAY) == pdTRUE) {
+                    if (job.value >= 0 && (size_t)job.value < s_wifi_count) selected = s_wifi_entries[job.value];
+                    saved = selected.ssid[0] && sr_store_save_network(selected.ssid, selected.pass) == ESP_OK;
+                    if (saved) {
+                        snprintf(s_cfg.wifi_ssid, sizeof(s_cfg.wifi_ssid), "%s", selected.ssid);
+                        snprintf(s_cfg.wifi_pass, sizeof(s_cfg.wifi_pass), "%s", selected.pass);
+                    }
+                    xSemaphoreGiveRecursive(s_mutex);
+                }
+                bool ok = saved && sr_net_start(selected.ssid, selected.pass) == ESP_OK;
+                if (xSemaphoreTakeRecursive(s_mutex, portMAX_DELAY) == pdTRUE) {
+                    if (s_screen == SR_SC_WIFI) fill_wifi_list();
+                    if (ok) toast_locked("正在连接", false);
+                    else toast_locked("连接失败", true);
+                    mark_rebuild();
+                    xSemaphoreGiveRecursive(s_mutex);
+                }
+                memset(&selected, 0, sizeof(selected));
+                break;
+            }
             case JOB_COVER: {
                 if (xSemaphoreTakeRecursive(s_mutex, portMAX_DELAY) == pdTRUE) {
                     bool sleeping = s_display_suspended;
@@ -1248,13 +1314,24 @@ static void worker_task(void *arg) {
 static bool pair_on_wifi(const char *ssid, const char *pass, void *ctx) {
     (void)ctx;
     if (!ssid || !ssid[0]) return false;
-    const esp_err_t err = sr_store_save_network(ssid, pass);
-    if (err != ESP_OK) return false;
     if (xSemaphoreTakeRecursive(s_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
+    const esp_err_t err = sr_store_save_network(ssid, pass);
+    if (err != ESP_OK) { xSemaphoreGiveRecursive(s_mutex); return false; }
     sr_utf8_ellipsis(ssid, s_cfg.wifi_ssid, sizeof(s_cfg.wifi_ssid));
     sr_utf8_ellipsis(pass, s_cfg.wifi_pass, sizeof(s_cfg.wifi_pass));
+    s_wifi_count = sr_store_list_networks(s_wifi_entries, SR_WIFI_MAX);
     xSemaphoreGiveRecursive(s_mutex);
     return sr_net_start(ssid, pass) == ESP_OK;
+}
+
+static bool pair_on_wifi_save(const char *ssid, const char *pass, void *ctx) {
+    (void)ctx;
+    if (!ssid || !ssid[0]) return false;
+    if (xSemaphoreTakeRecursive(s_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
+    bool ok = sr_store_add_network(ssid, pass, false) == ESP_OK;
+    if (ok) s_wifi_count = sr_store_list_networks(s_wifi_entries, SR_WIFI_MAX);
+    xSemaphoreGiveRecursive(s_mutex);
+    return ok;
 }
 
 static bool pair_on_auth(const char *client_id, const char *access, const char *refresh,
@@ -1305,6 +1382,7 @@ esp_err_t sr_app_start(void) {
 
     sr_store_load(&s_cfg);
     sr_store_init();
+    s_wifi_count = sr_store_list_networks(s_wifi_entries, SR_WIFI_MAX);
     sr_playback_reset(&s_pb);
     sr_progress_init(&s_progress);
     sr_gate_init(&s_gate, 800000);
@@ -1321,6 +1399,7 @@ esp_err_t sr_app_start(void) {
 
     const sr_pair_callbacks_t callbacks = {
         .on_wifi = pair_on_wifi,
+        .on_wifi_save = pair_on_wifi_save,
         .on_auth = pair_on_auth,
         .on_state = pair_on_state,
         .query_auth = pair_query_auth,

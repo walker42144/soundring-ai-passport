@@ -1,9 +1,23 @@
 #include "sr_policy.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+bool sr_playlist_id_valid(const char *id) {
+    if (!id || !*id) return false;
+    size_t n = 0;
+    for (const unsigned char *p = (const unsigned char *)id; *p; ++p) {
+        if (!( (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+               (*p >= '0' && *p <= '9') ) || ++n > 32) return false;
+    }
+    return true;
+}
+
+bool sr_list_request_current(uint32_t request, uint32_t current, int request_screen,
+                             int current_screen, int request_offset, int current_offset) {
+    return request == current && request_screen == current_screen && request_offset == current_offset;
+}
 
 // 由年月日算 UTC 秒数（Howard Hinnant 的 days_from_civil）。
 // 设备端 newlib 与 MSVC 都没有可移植的 timegm，故自带实现。

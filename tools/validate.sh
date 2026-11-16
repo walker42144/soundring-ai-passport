@@ -58,6 +58,9 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Itests/store_stubs -Imain \
         tests/test_sr_store_poll.c main/sr_store.c -o "${test_dir}/test_sr_store_poll"
     "${test_dir}/test_sr_store_poll"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Itests/store_stubs -Imain \
+        tests/test_sr_wifi_store.c main/sr_store.c -o "${test_dir}/test_sr_wifi_store"
+    "${test_dir}/test_sr_wifi_store"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_sr_progress.c main/sr_progress.c -lm \
         -o "${test_dir}/test_sr_progress"

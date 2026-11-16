@@ -13,6 +13,13 @@
 
 static const char *TAG = "sr_http";
 
+static void list_heap(const char *stage) {
+    ESP_LOGI(TAG, "list %s heap=%u largest=%u min=%u", stage,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+}
+
 void sr_http_resp_clear(sr_http_resp_t *resp) {
     if (!resp)
         return;
@@ -52,6 +59,9 @@ static esp_err_t http_do(sr_method_t method, const char *url, const char *bearer
     if (!url || !resp)
         return ESP_ERR_INVALID_ARG;
     memset(resp, 0, sizeof(*resp));
+    const bool list_diag = strstr(url, "/playlists") || strstr(url, "/player/queue") ||
+                           strstr(url, "/recently-played");
+    if (list_diag) list_heap("before connect");
 
     esp_http_client_config_t config = {
         .url = url,
@@ -109,6 +119,7 @@ static esp_err_t http_do(sr_method_t method, const char *url, const char *bearer
         return ESP_FAIL;
     }
     resp->status = esp_http_client_get_status_code(client);
+    if (list_diag) list_heap("headers received");
 
     if (resp->status >= 200 && resp->status < 300 && consume) {
         char chunk[512];
@@ -220,6 +231,7 @@ static esp_err_t http_do(sr_method_t method, const char *url, const char *bearer
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
+    if (list_diag) list_heap("connection closed");
     return ESP_OK;
 }
 

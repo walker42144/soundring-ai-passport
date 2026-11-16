@@ -59,6 +59,10 @@ int64_t sr_429_block_ms(const char *body_reason_or_body, int64_t retry_after_ms)
 const char *sr_429_text(bool quota);
 bool sr_may_retry_read(int status);
 int sr_page_clamp(int offset, int limit, int total);
+// Spotify playlist path parameters are IDs, not URIs or display text.
+bool sr_playlist_id_valid(const char *id);
+bool sr_list_request_current(uint32_t request, uint32_t current, int request_screen,
+                             int current_screen, int request_offset, int current_offset);
 
 typedef enum {
     SR_ERR_READ = 0,

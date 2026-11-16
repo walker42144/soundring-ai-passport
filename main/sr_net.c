@@ -62,7 +62,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         s_rssi = 0;
         strcpy(s_ip, "-");
         ESP_LOGW(TAG, "Wi-Fi 断开 reason=%d", ev ? ev->reason : -1);
-        schedule_retry();
+        if (s_connect_enabled) schedule_retry();
         notify();
     }
 }
@@ -151,12 +151,23 @@ esp_err_t sr_net_start(const char *ssid, const char *pass) {
         if (err != ESP_OK) return err;
         s_wifi_started = true;
     } else {
-        s_connect_enabled = true;
+        s_connect_enabled = false;
+        if (s_retry_timer) esp_timer_stop(s_retry_timer);
+        (void)esp_wifi_disconnect();
+        s_connected = false;
+        s_rssi = 0;
+        strcpy(s_ip, "-");
         err = esp_wifi_set_config(WIFI_IF_STA, &wc);
         if (err != ESP_OK) return err;
-        esp_wifi_connect();
+        s_retry_delay_ms = 3000;
+        s_connect_enabled = true;
+        err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            schedule_retry();
+            return err;
+        }
     }
-    ESP_LOGI(TAG, "连接 SSID=%s", s_ssid);
+    ESP_LOGI(TAG, "正在连接 Wi-Fi");
     return ESP_OK;
 }
 

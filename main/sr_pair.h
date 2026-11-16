@@ -9,6 +9,7 @@
 
 typedef struct {
     bool (*on_wifi)(const char *ssid, const char *pass, void *ctx);
+    bool (*on_wifi_save)(const char *ssid, const char *pass, void *ctx);
     bool (*on_auth)(const char *client_id, const char *access, const char *refresh,
                     const char *scope, int64_t expires_at_ms, void *ctx);
     void (*on_state)(const char *text, void *ctx);

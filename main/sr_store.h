@@ -4,6 +4,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "esp_err.h"
 
@@ -12,6 +13,12 @@
 #define SR_CLIENT_ID_CAP 64
 #define SR_TOKEN_CAP 512
 #define SR_SCOPE_CAP 200
+#define SR_WIFI_MAX 4
+
+typedef struct {
+    char ssid[SR_SSID_CAP];
+    char pass[SR_PASS_CAP];
+} sr_wifi_entry_t;
 
 typedef struct {
     char wifi_ssid[SR_SSID_CAP];
@@ -39,3 +46,5 @@ esp_err_t sr_store_clear_auth(void);
 esp_err_t sr_store_clear_all(void);
 bool sr_store_has_wifi(const sr_config_t *cfg);
 bool sr_store_has_auth(const sr_config_t *cfg);
+esp_err_t sr_store_add_network(const char *ssid, const char *pass, bool activate);
+size_t sr_store_list_networks(sr_wifi_entry_t *out, size_t cap);

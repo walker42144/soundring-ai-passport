@@ -34,3 +34,7 @@ The project is under the [MIT License](LICENSE); bundled third-party code and fo
 ## Immersive mode and device status
 
 On the home screen, double press Next for immersive mode or Previous for device status. Hold OK to return home; use Up/Down to switch status pages. The screen-off policy schedules playback synchronization approximately once per minute and requests a fresh synchronization on wake, subject to connectivity and Spotify rate limits.
+
+## Saved Wi-Fi networks
+
+The pairing tool can save up to four 2.4 GHz networks on the device, including the previously configured network. Use the backup Wi-Fi button to add up to three entries; leave the primary network blank to add backups without changing the active connection. On the device choose Settings → Wi-Fi and select a saved network. Saved credentials remain in unencrypted NVS; protect access to the device. This version does not automatically switch networks.

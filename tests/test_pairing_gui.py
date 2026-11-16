@@ -31,6 +31,15 @@ class Device:
         self.last = 0
         self.connected = False
         self.auth = False
+        self.saved_networks = []
+        self.dtr = self.rts = False
+        self.port = None
+
+    def open(self):
+        self.pending.append(("SRPAIR1 " + json.dumps({"v": 1, "nonce": bytes(range(16)).hex()}) + "\r\n").encode())
+
+    def close(self):
+        pass
 
     def write(self, data):
         obj = json.loads(data)
@@ -41,14 +50,16 @@ class Device:
                 obj["mac"], hmac.new(self.key, b"hello", hashlib.sha256).hexdigest()
             ):
                 err = "bad_code"
-        elif cmd in ("wifi", "auth"):
+        elif cmd in ("wifi", "wifi_save", "auth"):
             if obj["n"] != self.last + 1:
                 err = "bad_sequence"
             else:
                 aad = f"sr1|{cmd}|{obj['n']}".encode()
                 ct = bytes.fromhex(obj["ct"]) + bytes.fromhex(obj["tag"])
                 data = mod.AESGCM(self.key).decrypt(bytes.fromhex(obj["iv"]), ct, aad)
-                assert isinstance(json.loads(data), dict)
+                payload = json.loads(data)
+                assert isinstance(payload, dict)
+                if cmd == "wifi_save": self.saved_networks.append(payload)
                 self.last += 1
                 self.connected |= cmd == "wifi"
                 self.auth |= cmd == "auth"
@@ -57,7 +68,7 @@ class Device:
             if cmd == "status"
             else "saved"
         )
-        response = {"cmd": cmd, "error": err} if err else {"cmd": cmd, "note": note}
+        response = {"cmd": cmd, "error": err} if err else {"cmd": cmd, "note": note, "wifi_multi": True}
         self.pending.append(
             (("SRERR " if err else "SROK ") + json.dumps(response) + "\r\n").encode()
         )
@@ -79,11 +90,13 @@ mod.exchange(
     "hello",
 )
 mod.secure(port, key, "wifi", 1, {"ssid": "sample", "pass": "sample-pass"})
+mod.secure(port, key, "wifi_save", 2, {"ssid": "backup", "pass": "backup-pass"})
+assert port.connected and port.saved_networks == [{"ssid": "backup", "pass": "backup-pass"}]
 mod.secure(
     port,
     key,
     "auth",
-    2,
+    3,
     {
         "client_id": "a" * 32,
         "access_token": "a",
@@ -101,6 +114,27 @@ except mod.PairError as e:
 else:
     raise AssertionError("bad code accepted")
 print("mock pairing wifi + auth + status + bad code: PASS")
+
+# Backup-only provisioning must not change the active connection.
+mock_port = Device()
+class WorkerHarness:
+    def __init__(self):
+        self.q = mod.queue.Queue()
+    def report(self, message):
+        pass
+original_serial = mod.serial.Serial
+mod.serial.Serial = lambda **kwargs: mock_port
+try:
+    harness = WorkerHarness()
+    mod.App.worker(harness, {"port": "COM-test", "code": "12345678", "wifi": True,
+                            "auth": False, "ssid": "", "password": "",
+                            "extra_wifi": [("backup", "secret"), ("", ""), ("", "")]})
+    assert mock_port.saved_networks == [{"ssid": "backup", "pass": "secret"}]
+    assert not mock_port.connected
+    assert harness.q.get_nowait()[0] == "done"
+finally:
+    mod.serial.Serial = original_serial
+print("backup-only pairing PASS")
 
 # Exercise the configurable loopback callback and PKCE token request end-to-end
 # with local mocks; no real Spotify account or device is contacted.
