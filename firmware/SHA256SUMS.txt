@@ -1,0 +1,2 @@
+67a7782d09dddf102ae7ec90fb8127a969802ffd7bddf1d7f771b4208d126260  soundring-app.bin
+56e8a83a9faffd5792c25067569e13fd7169e1ec3f31dd4c7e06fb2b635e4f96  soundring-full.bin

@@ -1,0 +1,6 @@
+# Name,   Type, SubType, Offset,   Size,     Flags
+# SoundRing 遥控器：NVS 保存 Wi-Fi 与 Spotify 授权；covers 保存有界封面缓存。
+nvs,      data, nvs,     0x9000,   0x10000,
+phy_init, data, phy,     0x19000,  0x1000,
+factory,  app,  factory, 0x20000,  0x6e0000,
+covers,   data, spiffs,  0x700000, 0x100000,
