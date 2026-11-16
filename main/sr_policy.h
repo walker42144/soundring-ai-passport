@@ -23,7 +23,20 @@ int64_t sr_retry_after_ms(const char *value, int64_t now_epoch_ms);
 // 读取失败退避：2s << (failures-1)，上限 32s。
 int64_t sr_failure_backoff_ms(int failures);
 // 下一次轮询的等待时间（毫秒）。blocked_until_us 来自 429。
-typedef enum { SR_POLL_ECO = 0, SR_POLL_NORMAL = 1, SR_POLL_QUICK = 2 } sr_poll_mode_t;
+typedef enum { SR_POLL_ECO = 0, SR_POLL_NORMAL = 1, SR_POLL_QUICK = 2,
+               SR_POLL_AUTO = 3, SR_POLL_SCREEN_OFF = 4 } sr_poll_mode_t;
+// Screen-off always uses the slow schedule, regardless of the selected mode.
+sr_poll_mode_t sr_effective_poll_mode(sr_poll_mode_t selected, bool screen_off);
+// Zero disables the corresponding timeout; both values are measured from the last key press.
+bool sr_power_dim_due(int64_t idle_us, uint16_t dim_sec);
+bool sr_power_off_due(int64_t idle_us, uint16_t off_sec);
+typedef enum { SR_POWER_IDLE, SR_POWER_DIM, SR_POWER_OFF } sr_power_action_t;
+// Always-on suppresses automatic off, but uses the same dim timer.
+sr_power_action_t sr_power_idle_action(bool always_on, bool dimmed, int64_t idle_us,
+                                      uint16_t dim_sec, uint16_t off_sec);
+// The first recognized key gesture restores brightness only.
+bool sr_power_key_wakes_only(bool suspended, bool dimmed);
+uint16_t sr_power_next_timeout(uint16_t current);
 // 快速：播放 2s / 暂停或无播放 3s；标准：3s / 6s；省电：5s / 15s。
 // 失败退避和 Spotify 429 封禁在所有模式下始终生效。
 int64_t sr_poll_delay_ms(int64_t start_us, int64_t now_us, int64_t blocked_until_us,

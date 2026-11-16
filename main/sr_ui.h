@@ -42,6 +42,7 @@ typedef struct {
     const sr_progress_t *progress;
     bool liked;
     bool like_known;
+    bool playback_stale;
 
     int draft;           // 音量/进度草稿
     bool dirty;          // 草稿未提交

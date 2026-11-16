@@ -28,7 +28,7 @@
 
 static const char *TAG = "sr_app";
 #define SR_PAGE 6
-#define SR_SETTINGS_COUNT 8
+#define SR_SETTINGS_COUNT 10
 #define SR_NAV_DEPTH 4
 #define SR_JOB_DEPTH 6
 // 首页进度 tick：只重绘文本与进度条，不发请求。播放中 1s，暂停 5s。
@@ -100,6 +100,8 @@ static sr_gate_t s_gate;
 static int64_t s_next_poll_us;
 static int64_t s_next_tick_us;   // 首页进度 tick；与网络轮询完全独立
 static int s_poll_failures;
+static int64_t s_last_playback_sync_us;
+static bool s_playback_stale;
 static int64_t s_last_key_us;
 static bool s_display_suspended;
 static bool s_dimmed;
@@ -168,6 +170,7 @@ static void build_view_locked(sr_view_t *view, bool *rebuild) {
     view->progress = &s_progress;
     view->liked = s_liked;
     view->like_known = s_like_known;
+    view->playback_stale = s_playback_stale;
     view->draft = s_screen == SR_SC_SEEK ? s_seek_draft
                   : s_screen == SR_SC_BRIGHTNESS ? s_brightness_draft
                                                  : s_volume_draft;
@@ -245,28 +248,36 @@ static void fill_settings_list(void) {
 
     if (s_cfg.dim_sec == 0) snprintf(value, sizeof(value), "不自动");
     else snprintf(value, sizeof(value), "%u 秒", (unsigned)s_cfg.dim_sec);
-    sr_utf8_ellipsis("自动息屏", s_list.items[1].title, sizeof(s_list.items[1].title));
+    sr_utf8_ellipsis("屏幕调暗", s_list.items[1].title, sizeof(s_list.items[1].title));
     sr_utf8_ellipsis(value, s_list.items[1].subtitle, sizeof(s_list.items[1].subtitle));
 
-    sr_utf8_ellipsis("立即息屏", s_list.items[2].title, sizeof(s_list.items[2].title));
-    sr_utf8_ellipsis("按确定", s_list.items[2].subtitle, sizeof(s_list.items[2].subtitle));
+    if (s_cfg.off_sec == 0) snprintf(value, sizeof(value), "不自动");
+    else snprintf(value, sizeof(value), "%u 秒", (unsigned)s_cfg.off_sec);
+    sr_utf8_ellipsis("屏幕熄灭", s_list.items[2].title, sizeof(s_list.items[2].title));
+    sr_utf8_ellipsis(value, s_list.items[2].subtitle, sizeof(s_list.items[2].subtitle));
 
-    sr_utf8_ellipsis("同步速度", s_list.items[3].title, sizeof(s_list.items[3].title));
-    sr_utf8_ellipsis(s_cfg.poll_mode == SR_POLL_QUICK ? "快速" :
-                     s_cfg.poll_mode == SR_POLL_NORMAL ? "标准" : "省电", s_list.items[3].subtitle,
-                     sizeof(s_list.items[3].subtitle));
+    sr_utf8_ellipsis("立即息屏", s_list.items[3].title, sizeof(s_list.items[3].title));
+    sr_utf8_ellipsis("按确定", s_list.items[3].subtitle, sizeof(s_list.items[3].subtitle));
 
-    sr_utf8_ellipsis("电脑配对", s_list.items[4].title, sizeof(s_list.items[4].title));
-    sr_utf8_ellipsis("USB", s_list.items[4].subtitle, sizeof(s_list.items[4].subtitle));
+    sr_utf8_ellipsis("同步速度", s_list.items[4].title, sizeof(s_list.items[4].title));
+    sr_utf8_ellipsis(s_cfg.poll_mode == SR_POLL_AUTO ? "自动" :
+                     s_cfg.poll_mode == SR_POLL_QUICK ? "快速" :
+                     s_cfg.poll_mode == SR_POLL_NORMAL ? "标准" : "省电", s_list.items[4].subtitle,
+                     sizeof(s_list.items[4].subtitle));
 
-    sr_utf8_ellipsis("清除授权", s_list.items[5].title, sizeof(s_list.items[5].title));
-    sr_utf8_ellipsis(s_settings_confirm ? "再按确定" : "需确认", s_list.items[5].subtitle,
-                     sizeof(s_list.items[5].subtitle));
+    sr_utf8_ellipsis("电脑配对", s_list.items[5].title, sizeof(s_list.items[5].title));
+    sr_utf8_ellipsis("USB", s_list.items[5].subtitle, sizeof(s_list.items[5].subtitle));
 
-    sr_utf8_ellipsis("使用说明", s_list.items[6].title, sizeof(s_list.items[6].title));
-    sr_utf8_ellipsis("按键", s_list.items[6].subtitle, sizeof(s_list.items[6].subtitle));
+    sr_utf8_ellipsis("清除授权", s_list.items[6].title, sizeof(s_list.items[6].title));
+    sr_utf8_ellipsis(s_settings_confirm ? "再按确定" : "需确认", s_list.items[6].subtitle,
+                     sizeof(s_list.items[6].subtitle));
 
-    sr_utf8_ellipsis("返回", s_list.items[7].title, sizeof(s_list.items[7].title));
+    sr_utf8_ellipsis("使用说明", s_list.items[7].title, sizeof(s_list.items[7].title));
+    sr_utf8_ellipsis("按键", s_list.items[7].subtitle, sizeof(s_list.items[7].subtitle));
+
+    sr_utf8_ellipsis("返回", s_list.items[9].title, sizeof(s_list.items[9].title));
+    sr_utf8_ellipsis("屏幕常亮", s_list.items[8].title, sizeof(s_list.items[8].title));
+    sr_utf8_ellipsis(s_cfg.always_on ? "开启" : "关闭", s_list.items[8].subtitle, sizeof(s_list.items[8].subtitle));
     for (int i = 0; i < SR_SETTINGS_COUNT; ++i) {
         s_list.items[i].actionable = true;
         s_list.items[i].position = i;
@@ -454,7 +465,8 @@ static void sleep_now_locked(void) {
     (void)panel_display_on(false);
     bsp_display_backlight(0);
     s_display_suspended = true;
-    ESP_LOGI(TAG, "息屏（关闭显示与背光，重绘与同步暂停）");
+    s_next_poll_us = esp_timer_get_time() + 60000000LL;
+    ESP_LOGI(TAG, "息屏（停止重绘，低频同步）");
 }
 
 static void settings_activate_locked(void) {
@@ -466,26 +478,27 @@ static void settings_activate_locked(void) {
             break;
         }
         case 1:
-            if (s_cfg.dim_sec == 0) s_cfg.dim_sec = 30;
-            else if (s_cfg.dim_sec == 30) s_cfg.dim_sec = 60;
-            else if (s_cfg.dim_sec == 60) s_cfg.dim_sec = 120;
-            else s_cfg.dim_sec = 0;
+            s_cfg.dim_sec = sr_power_next_timeout(s_cfg.dim_sec);
             (void)sr_store_save_settings(&s_cfg);
             break;
         case 2:
-            sleep_now_locked();
-            break;
-        case 3:
-            s_cfg.poll_mode = (s_cfg.poll_mode + 1) % 3;
+            s_cfg.off_sec = sr_power_next_timeout(s_cfg.off_sec);
             (void)sr_store_save_settings(&s_cfg);
             break;
-        case 4: {
+        case 3:
+            sleep_now_locked();
+            break;
+        case 4:
+            s_cfg.poll_mode = (s_cfg.poll_mode + 1) % 4;
+            (void)sr_store_save_settings(&s_cfg);
+            break;
+        case 5: {
             char title[40];
             sr_utf8_ellipsis("电脑配对", title, sizeof(title));
             enter_screen_locked(SR_SC_PAIRING, title, 0);
             break;
         }
-        case 5:
+        case 6:
             if (s_settings_confirm) {
                 (void)sr_store_clear_auth();
                 memset(s_cfg.access_token, 0, sizeof(s_cfg.access_token));
@@ -501,8 +514,12 @@ static void settings_activate_locked(void) {
                 toast_locked("再按一次确定清除授权", true);
             }
             break;
-        case 6:
+        case 7:
             enter_screen_locked(SR_SC_HELP, "使用说明", 0);
+            break;
+        case 8:
+            s_cfg.always_on = !s_cfg.always_on;
+            (void)sr_store_save_settings(&s_cfg);
             break;
         default:
             go_back_locked();
@@ -777,6 +794,7 @@ void sr_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     if (xSemaphoreTakeRecursive(s_mutex, pdMS_TO_TICKS(400)) != pdTRUE) return;
 
     s_last_key_us = esp_timer_get_time();
+    const bool wake_only = sr_power_key_wakes_only(s_display_suspended, s_dimmed);
     if (s_display_suspended) {
         // 先开面板：失败就保持息屏状态，下次按键重试唤醒，避免停在“只写 GRAM 不重开扫描”的黑屏。
         if (!panel_display_on(true)) {
@@ -801,7 +819,7 @@ void sr_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         bsp_display_backlight((uint8_t)(s_screen == SR_SC_BRIGHTNESS ? s_brightness_draft
                                                                     : s_saved_brightness));
     }
-    handle_key_inner(btn, ev);
+    if (!wake_only) handle_key_inner(btn, ev);
     xSemaphoreGiveRecursive(s_mutex);
 }
 
@@ -829,12 +847,15 @@ static void do_poll(void) {
             job_result_toast(&result);
         }
         s_next_poll_us = esp_timer_get_time() + sr_poll_delay_ms(start, esp_timer_get_time(), s_sp.blocked_until_us,
-                                                 false, s_poll_failures, (sr_poll_mode_t)s_cfg.poll_mode) * 1000;
+                                                 false, s_poll_failures,
+                                                 sr_effective_poll_mode((sr_poll_mode_t)s_cfg.poll_mode, s_display_suspended)) * 1000;
         render_locked();
         xSemaphoreGiveRecursive(s_mutex);
         return;
     }
     s_poll_failures = 0;
+    s_last_playback_sync_us = esp_timer_get_time();
+    s_playback_stale = false;
     s_pb = fresh;
     const bool same_track = s_progress.identity == sr_hash32(s_pb.uri);
     sr_progress_update(&s_progress, sr_hash32(s_pb.uri), s_pb.position_ms, s_pb.duration_ms,
@@ -844,20 +865,22 @@ static void do_poll(void) {
         s_liked = false;
         s_like_known = false;
         s_like_after_check = false;
-        if (s_pb.uri[0]) enqueue(JOB_LIKE_CHECK, 0, 0, s_pb.uri, NULL);
     }
+    if (!s_display_suspended && !s_like_known && !s_like_pending && s_pb.uri[0])
+        enqueue(JOB_LIKE_CHECK, 0, 0, s_pb.uri, NULL);
     if (strcmp(s_pb.cover_url, s_cover_url) != 0) {
         sr_utf8_ellipsis(s_pb.cover_url, s_cover_url, sizeof(s_cover_url));
         sr_cover_clear();
         s_cover_retry_us = 0;
     }
-    if (s_cover_url[0] && !s_cover_pending && !sr_cover_matches(s_cover_url) &&
+    if (!s_display_suspended && s_cover_url[0] && !s_cover_pending && !sr_cover_matches(s_cover_url) &&
         esp_timer_get_time() >= s_cover_retry_us) {
         s_cover_pending = enqueue(JOB_COVER, 0, 0, s_cover_url, NULL);
         if (!s_cover_pending) s_cover_retry_us = esp_timer_get_time() + 3000000;
     }
     s_next_poll_us = esp_timer_get_time() + sr_poll_delay_ms(start, esp_timer_get_time(), s_sp.blocked_until_us,
-                                             s_pb.playing, 0, (sr_poll_mode_t)s_cfg.poll_mode) * 1000;
+                                             s_pb.playing, 0,
+                                             sr_effective_poll_mode((sr_poll_mode_t)s_cfg.poll_mode, s_display_suspended)) * 1000;
     // 菜单停在屏幕上时也让“随机/循环”副标题跟随服务器状态。
     if (is_navigation_screen(s_screen)) fill_menu_list();
     render_locked();
@@ -1019,15 +1042,25 @@ static void idle_tick_locked(void) {
         s_next_poll_us = now;
         render_locked();
     }
-    if (s_cfg.dim_sec > 0 && !s_display_suspended && !sr_pair_active()) {
+    if (!s_playback_stale && s_pb.playing && s_last_playback_sync_us > 0 &&
+        (s_screen == SR_SC_HOME || s_display_suspended) &&
+        now - s_last_playback_sync_us >= (s_display_suspended ? 75000000LL : 15000000LL)) {
+        int32_t position = sr_progress_position(&s_progress, now);
+        s_pb.position_ms = position;
+        s_pb.playing = false;
+        s_playback_stale = true;
+        sr_progress_update(&s_progress, sr_hash32(s_pb.uri), position, s_pb.duration_ms, false, now);
+        render_locked();
+    }
+    if (!s_display_suspended && !sr_pair_active()) {
         const int64_t idle_us = now - s_last_key_us;
-        if (!s_dimmed && idle_us > (int64_t)s_cfg.dim_sec * 1000000) {
+        const sr_power_action_t action = sr_power_idle_action(s_cfg.always_on, s_dimmed, idle_us,
+                                                              s_cfg.dim_sec, s_cfg.off_sec);
+        if (action == SR_POWER_OFF) {
+            sleep_now_locked();
+        } else if (action == SR_POWER_DIM) {
             s_dimmed = true;
             bsp_display_backlight(10);
-        }
-        if (s_dimmed && idle_us > ((int64_t)s_cfg.dim_sec + 30) * 1000000) {
-            // 息屏：关闭面板扫描与背光，重绘与同步暂停；LVGL 与 Wi-Fi 保持在线，按键立即恢复。
-            sleep_now_locked();
         }
     }
     if (now > s_next_battery_us) {
@@ -1050,7 +1083,7 @@ static bool poll_due_locked(void) {
     // 429 封禁期内不再发请求：否则每 2 秒撞一次墙、每次都弹提示。
     // 校时完成前不发 HTTPS：证书有效期校验会直接失败，界面却显示成“网络请求失败”，
     // 很容易被误判为 Wi-Fi 故障。
-    return s_screen == SR_SC_HOME && !s_display_suspended && sr_net_connected() &&
+    return (s_screen == SR_SC_HOME || s_display_suspended) && !sr_pair_active() && sr_net_connected() &&
            sr_net_time_valid() && sr_store_has_auth(&s_cfg) && !s_sp.auth_failed &&
            !sr_sp_blocked(&s_sp, esp_timer_get_time()) &&
            esp_timer_get_time() >= s_next_poll_us;
@@ -1119,16 +1152,22 @@ static void worker_task(void *arg) {
                 do_list(job.arg, job.value);
                 break;
             case JOB_COVER: {
+                if (xSemaphoreTakeRecursive(s_mutex, portMAX_DELAY) == pdTRUE) {
+                    bool sleeping = s_display_suspended;
+                    if (sleeping) s_cover_pending = false;
+                    xSemaphoreGiveRecursive(s_mutex);
+                    if (sleeping) break;
+                }
                 const bool got = sr_cover_prepare(job.text);
                 if (got) log_heap("封面解码后");
                 if (xSemaphoreTakeRecursive(s_mutex, portMAX_DELAY) == pdTRUE) {
                     s_cover_pending = false;
                     if (!got) s_cover_retry_us = esp_timer_get_time() + 30000000;
+                    if (!s_display_suspended && bsp_lvgl_lock(300)) {
+                        sr_ui_attach_cover();
+                        bsp_lvgl_unlock();
+                    }
                     xSemaphoreGiveRecursive(s_mutex);
-                }
-                if (bsp_lvgl_lock(300)) {
-                    sr_ui_attach_cover();
-                    bsp_lvgl_unlock();
                 }
                 break;
             }
@@ -1194,7 +1233,7 @@ static void pair_on_state(const char *text, void *ctx) {
 static void net_event(void) {
     if (xSemaphoreTakeRecursive(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         mark_rebuild();
-        if (sr_net_connected()) s_next_poll_us = esp_timer_get_time();
+        if (sr_net_connected()) s_next_poll_us = esp_timer_get_time() + (s_display_suspended ? 60000000LL : 0);
         xSemaphoreGiveRecursive(s_mutex);
     }
 }

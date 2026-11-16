@@ -92,11 +92,45 @@ int64_t sr_failure_backoff_ms(int failures) {
     return delay;
 }
 
+sr_poll_mode_t sr_effective_poll_mode(sr_poll_mode_t selected, bool screen_off) {
+    if (screen_off) return SR_POLL_SCREEN_OFF;
+    return selected == SR_POLL_AUTO ? SR_POLL_QUICK : selected;
+}
+
+bool sr_power_dim_due(int64_t idle_us, uint16_t dim_sec) {
+    return dim_sec && idle_us >= (int64_t)dim_sec * 1000000;
+}
+
+bool sr_power_off_due(int64_t idle_us, uint16_t off_sec) {
+    return off_sec && idle_us >= (int64_t)off_sec * 1000000;
+}
+
+sr_power_action_t sr_power_idle_action(bool always_on, bool dimmed, int64_t idle_us,
+                                      uint16_t dim_sec, uint16_t off_sec) {
+    if (!always_on && sr_power_off_due(idle_us, off_sec)) return SR_POWER_OFF;
+    if (!dimmed && sr_power_dim_due(idle_us, dim_sec)) return SR_POWER_DIM;
+    return SR_POWER_IDLE;
+}
+
+bool sr_power_key_wakes_only(bool suspended, bool dimmed) {
+    return suspended || dimmed;
+}
+
+uint16_t sr_power_next_timeout(uint16_t current) {
+    static const uint16_t values[] = {0, 15, 30, 60, 90, 120, 300};
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
+        if (values[i] == current) return values[(i + 1) % (sizeof(values) / sizeof(values[0]))];
+    return 0;
+}
+
 int64_t sr_poll_delay_ms(int64_t start_us, int64_t now_us, int64_t blocked_until_us,
                          bool playing, int failures, sr_poll_mode_t mode) {
     int64_t interval;
     if (failures > 0) {
         interval = sr_failure_backoff_ms(failures);
+        if (mode == SR_POLL_SCREEN_OFF && interval < 60000) interval = 60000;
+    } else if (mode == SR_POLL_SCREEN_OFF) {
+        interval = 60000;
     } else if (mode == SR_POLL_QUICK) {
         interval = playing ? 2000 : 3000;
     } else if (mode == SR_POLL_NORMAL) {

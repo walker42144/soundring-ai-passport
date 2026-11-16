@@ -33,6 +33,7 @@ ROOT_MARKDOWN_ALLOWLIST = {
     "CLAUDE.zh_CN.md",
     "README.md",
     "README.zh_CN.md",
+    "README.en.md",
 }
 # Register only concrete, vendored component directories, e.g. "components/foo".
 # These exemptions never change the input to sensitive-content/conflict checks.
@@ -217,6 +218,19 @@ def check_document_languages(
         name = path.name
         text = path.read_text(encoding="utf-8")
         opening = "\n".join(text.splitlines()[:8])
+
+        # The public project homepage is intentionally Chinese-first. Keep its
+        # Chinese copy and English translation linked without weakening other pairs.
+        if path.parent == ROOT and name in {"README.md", "README.zh_CN.md", "README.en.md"}:
+            peers = {"README.md": ("README.zh_CN.md", "README.en.md"),
+                     "README.zh_CN.md": ("README.md", "README.en.md"),
+                     "README.en.md": ("README.md",)}[name]
+            for peer in peers:
+                if ROOT / peer not in markdown or peer not in opening:
+                    errors.append(f"{name}: missing top language link to {peer}")
+            if name == "README.en.md" and CJK_RE.search(text.replace("简体中文", "")):
+                errors.append(f"{name}: English translation must use English prose")
+            continue
 
         if name.endswith(".zh_CN.md"):
             default_name = f"{name[:-len('.zh_CN.md')]}.md"

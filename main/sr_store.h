@@ -22,8 +22,10 @@ typedef struct {
     char scope[SR_SCOPE_CAP];
     int64_t expires_at_ms;
     uint8_t brightness;   // 10..100（下限与 apply_brightness_locked 一致）
-    uint16_t dim_sec;     // 实际取值 0=不自动息屏 / 30 / 60 / 120（秒）
-    uint8_t poll_mode;    // 0=省电, 1=标准, 2=快速；保留旧值兼容
+    uint16_t dim_sec;     // 调暗时间，0=关闭
+    uint16_t off_sec;     // 熄屏时间，0=关闭；独立于调暗时间
+    uint8_t always_on;    // 常亮只禁用自动熄屏，调暗仍生效
+    uint8_t poll_mode;    // 0=省电, 1=标准, 2=快速, 3=自动
 } sr_config_t;
 
 esp_err_t sr_store_init(void);

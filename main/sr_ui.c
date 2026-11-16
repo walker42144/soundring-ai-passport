@@ -30,7 +30,12 @@ static lv_obj_t *value, *value_sub, *value_hint, *value_bar;
 static lv_image_dsc_t cover_desc;
 static sr_screen_t current = (sr_screen_t)-1;
 static sr_progress_t progress_snapshot;
-static lv_timer_t *progress_timer;
+static lv_timer_t *progress_timer, *ambient_timer;
+static lv_obj_t *ambient_glow;
+static unsigned ambient_phase;
+static int ambient_current[3] = {16, 39, 25};
+static int ambient_target[3] = {16, 39, 25};
+static uint32_t ambient_drawn = 0xffffffff;
 
 static bool font_has_glyph(uint32_t cp, void *context) {
     lv_font_glyph_dsc_t glyph = {0};
@@ -56,14 +61,37 @@ static void progress_tick(lv_timer_t *timer) {
     lv_label_set_text(elapsed, buf);
 }
 
+static void ambient_tick(lv_timer_t *timer) {
+    (void)timer;
+    if (current != SR_SC_HOME || !ambient_glow) return;
+    // Fade between covers, with a slow, restrained brightness cycle.
+    for (int i = 0; i < 3; ++i) {
+        int delta = ambient_target[i] - ambient_current[i];
+        ambient_current[i] += delta > 2 ? 2 : delta < -2 ? -2 : delta;
+    }
+    unsigned phase = ambient_phase++ % 48;
+    unsigned wave = phase < 24 ? phase : 47 - phase;
+    unsigned brightness = 80 + wave * 20 / 23;
+    uint32_t color = ((uint32_t)(ambient_current[0] * brightness / 100) << 16) |
+                     ((uint32_t)(ambient_current[1] * brightness / 100) << 8) |
+                     (uint32_t)(ambient_current[2] * brightness / 100);
+    if (color != ambient_drawn) {
+        lv_obj_set_style_bg_color(ambient_glow, lv_color_hex(color), 0);
+        ambient_drawn = color;
+    }
+}
+
 void sr_ui_pause_progress(void) {
     if (progress_timer) lv_timer_pause(progress_timer);
+    if (ambient_timer) lv_timer_pause(ambient_timer);
 }
 
 static void reset_refs(void) {
     status = footer = toast = art = art_placeholder = title = artist = device = bar = elapsed =
         duration = flags = playing = NULL;
     page = value = value_sub = value_hint = value_bar = NULL;
+    ambient_glow = NULL;
+    ambient_drawn = 0xffffffff;
     memset(rows, 0, sizeof(rows));
     memset(row_title, 0, sizeof(row_title));
     memset(row_sub, 0, sizeof(row_sub));
@@ -135,6 +163,8 @@ static const char *home_hint(const sr_view_t *v) {
         return "正在校时，请稍候";
     if (!v->auth_ok || v->auth_failed)
         return "授权失效，请在电脑重新授权";
+    if (v->playback_stale)
+        return "播放状态未确认，等待同步";
     if (!v->playback || !v->playback->has_device)
         return "请在 Spotify 开始播放";
     return "双击收藏 · 长按确定菜单";
@@ -214,6 +244,23 @@ void sr_ui_attach_cover(void) {
         return;
     uint16_t w = 0, h = 0;
     const uint8_t *pixels = sr_cover_pixels(&w, &h);
+    if (ambient_glow) {
+        unsigned r = 0, g = 0, b = 0, n = 0;
+        if (pixels && w && h) {
+            unsigned count = (unsigned)w * h;
+            unsigned step = count / 128 + 1;
+            for (unsigned i = 0; i < count; i += step) {
+                uint16_t c = (uint16_t)pixels[i * 2] | ((uint16_t)pixels[i * 2 + 1] << 8);
+                r += ((c >> 11) & 31) * 255 / 31;
+                g += ((c >> 5) & 63) * 255 / 63;
+                b += (c & 31) * 255 / 31;
+                n++;
+            }
+        }
+        ambient_target[0] = n ? 8 + (int)(r / n * 65 / 255) : 16;
+        ambient_target[1] = n ? 10 + (int)(g / n * 65 / 255) : 39;
+        ambient_target[2] = n ? 9 + (int)(b / n * 65 / 255) : 25;
+    }
     if (!pixels || !w || !h) {
         show(art, false);
         show(art_placeholder, true);
@@ -236,6 +283,11 @@ void sr_ui_render(const sr_view_t *v, bool rebuild) {
     if (!v)
         return;
     if (!progress_timer) progress_timer = lv_timer_create(progress_tick, 150, NULL);
+    if (!ambient_timer) ambient_timer = lv_timer_create(ambient_tick, 400, NULL);
+    if (ambient_timer) {
+        if (v->screen == SR_SC_HOME) lv_timer_resume(ambient_timer);
+        else lv_timer_pause(ambient_timer);
+    }
     if (v->progress) progress_snapshot = *v->progress;
     if (progress_timer) {
         if (v->screen == SR_SC_HOME && v->connected &&
@@ -249,6 +301,11 @@ void sr_ui_render(const sr_view_t *v, bool rebuild) {
             lv_obj_delete(root);
         reset_refs();
         root = box(lv_screen_active(), 0, 0, 240, 320, BG, 0);
+        if (v->screen == SR_SC_HOME) {
+            ambient_glow = box(root, 0, 22, 240, 175, BG, 0);
+            lv_obj_set_style_bg_grad_color(ambient_glow, lv_color_hex(BG), 0);
+            lv_obj_set_style_bg_grad_dir(ambient_glow, LV_GRAD_DIR_VER, 0);
+        }
         common();
         if (v->screen == SR_SC_HOME)
             home(v);
@@ -290,7 +347,7 @@ void sr_ui_render(const sr_view_t *v, bool rebuild) {
         lv_label_set_text(elapsed, buf);
         sr_format_time(p ? p->duration_ms : -1, buf, sizeof(buf));
         lv_label_set_text(duration, buf);
-        lv_label_set_text(playing, p && p->playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+        lv_label_set_text(playing, v->playback_stale ? "?" : (p && p->playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY));
         snprintf(buf, sizeof(buf), "%s   %s   %s", v->like_known ? (v->liked ? "已收藏" : "未收藏") : "收藏同步中",
                  p && p->shuffle ? "随机开" : "随机关",
                  p && strcmp(p->repeat, "off") ? "循环开" : "循环关");

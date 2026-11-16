@@ -41,6 +41,14 @@ class VendoredDocumentationTest(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
         return path
 
+    def test_chinese_first_root_readme_language_links(self) -> None:
+        files = [self.document("README.md", '[中文](README.zh_CN.md) [English](README.en.md)\n# 中文首页\n'),
+                 self.document("README.zh_CN.md", '[首页](README.md) [English](README.en.md)\n# 中文\n'),
+                 self.document("README.en.md", '[简体中文](README.md)\n# English\n')]
+        self.assertEqual(self.document_errors(files), [])
+        files[0].write_text('# 中文首页\n', encoding='utf8')
+        self.assertTrue(any('README.md: missing top language link' in e for e in self.document_errors(files)))
+
     def roots(self) -> tuple[Path, ...]:
         errors: list[str] = []
         roots = CHECKS.vendored_document_roots(errors)
@@ -146,7 +154,9 @@ class VendoredDocumentationTest(unittest.TestCase):
         target = self.document("components/vendor_audio/README.md")
         link = self.root / "README.md"
         self.symlink(link, target)
-        self.assertEqual(len(self.document_errors([link])), 2)
+        errors = self.document_errors([link])
+        self.assertTrue(any("missing link target" in error for error in errors))
+        self.assertTrue(any("README.md: missing top language link" in error for error in errors))
 
     def test_main_keeps_security_and_conflict_checks_for_vendored_text(self) -> None:
         # Assemble deliberately synthetic fixtures so the test source itself is clean.

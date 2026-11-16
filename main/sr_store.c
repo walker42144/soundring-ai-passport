@@ -39,8 +39,8 @@ void sr_store_load(sr_config_t *cfg) {
     memset(cfg, 0, sizeof(*cfg));
     cfg->brightness = 80;
     cfg->dim_sec = 60;
-    // 默认省电：C3 每 3 秒一次完整 TLS 握手对电池设备太贵，需要更顺的进度再手动切换。
-    cfg->poll_mode = SR_POLL_ECO;
+    cfg->off_sec = 90;
+    cfg->poll_mode = SR_POLL_AUTO;
 
     const nvs_handle_t handle = open_ns(NVS_READONLY);
     if (!handle) return;
@@ -60,8 +60,15 @@ void sr_store_load(sr_config_t *cfg) {
     }
     uint16_t dim = 0;
     if (nvs_get_u16(handle, "dim", &dim) == ESP_OK && dim <= 600) cfg->dim_sec = dim;
+    // Older firmware switched off 30 seconds after dimming. Keep that timing on migration.
+    cfg->off_sec = cfg->dim_sec ? cfg->dim_sec + 30 : 0;
+    uint16_t off = 0;
+    if (nvs_get_u16(handle, "off", &off) == ESP_OK && off <= 600) cfg->off_sec = off;
+    uint8_t always = 0;
+    if (nvs_get_u8(handle, "always", &always) == ESP_OK && always <= 1) cfg->always_on = always;
     uint8_t poll = 0;
-    if (nvs_get_u8(handle, "poll", &poll) == ESP_OK && poll <= SR_POLL_QUICK) cfg->poll_mode = poll;
+    // New key defaults existing installations to automatic without overwriting old preferences.
+    if (nvs_get_u8(handle, "pmode", &poll) == ESP_OK && poll <= SR_POLL_AUTO) cfg->poll_mode = poll;
     nvs_close(handle);
 }
 
@@ -108,7 +115,9 @@ esp_err_t sr_store_save_settings(const sr_config_t *cfg) {
     if (!handle) return ESP_FAIL;
     esp_err_t err = nvs_set_u8(handle, "bright", cfg->brightness);
     if (err == ESP_OK) err = nvs_set_u16(handle, "dim", cfg->dim_sec);
-    if (err == ESP_OK) err = nvs_set_u8(handle, "poll", cfg->poll_mode <= SR_POLL_QUICK ? cfg->poll_mode : SR_POLL_ECO);
+    if (err == ESP_OK) err = nvs_set_u16(handle, "off", cfg->off_sec);
+    if (err == ESP_OK) err = nvs_set_u8(handle, "always", cfg->always_on ? 1 : 0);
+    if (err == ESP_OK) err = nvs_set_u8(handle, "pmode", cfg->poll_mode <= SR_POLL_AUTO ? cfg->poll_mode : SR_POLL_AUTO);
     if (err == ESP_OK) err = nvs_commit(handle);
     nvs_close(handle);
     return err;
