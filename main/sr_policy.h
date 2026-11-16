@@ -22,6 +22,12 @@ void sr_gate_release(sr_gate_t *gate, int64_t now_us);
 int64_t sr_retry_after_ms(const char *value, int64_t now_epoch_ms);
 // 读取失败退避：2s << (failures-1)，上限 32s。
 int64_t sr_failure_backoff_ms(int failures);
+// Percent of the allocatable heap currently allocated; -1 if total is unavailable.
+int sr_heap_used_percent(size_t used, size_t free_bytes);
+// Whether a scheduled request can run, including a one-shot wake refresh.
+bool sr_poll_ready(bool playback_page, bool sleeping, bool wake_pending, bool pairing,
+                   bool connected, bool time_valid, bool authorized, bool blocked,
+                   int64_t now_us, int64_t next_us);
 // 下一次轮询的等待时间（毫秒）。blocked_until_us 来自 429。
 typedef enum { SR_POLL_ECO = 0, SR_POLL_NORMAL = 1, SR_POLL_QUICK = 2,
                SR_POLL_AUTO = 3, SR_POLL_SCREEN_OFF = 4 } sr_poll_mode_t;

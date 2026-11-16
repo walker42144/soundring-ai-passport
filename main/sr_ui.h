@@ -24,6 +24,8 @@ typedef enum {
     SR_SC_HELP,
     SR_SC_PAIRING,
     SR_SC_BRIGHTNESS,
+    SR_SC_IMMERSIVE,
+    SR_SC_STATUS,
 } sr_screen_t;
 
 #define SR_VIEW_ROWS 6
@@ -43,6 +45,8 @@ typedef struct {
     bool liked;
     bool like_known;
     bool playback_stale;
+    const char (*status_lines)[64];
+    int status_page;
 
     int draft;           // 音量/进度草稿
     bool dirty;          // 草稿未提交

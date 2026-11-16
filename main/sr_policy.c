@@ -92,6 +92,18 @@ int64_t sr_failure_backoff_ms(int failures) {
     return delay;
 }
 
+int sr_heap_used_percent(size_t used, size_t free_bytes) {
+    const uint64_t total = (uint64_t)used + free_bytes;
+    return total ? (int)(((uint64_t)used * 100) / total) : -1;
+}
+
+bool sr_poll_ready(bool playback_page, bool sleeping, bool wake_pending, bool pairing,
+                   bool connected, bool time_valid, bool authorized, bool blocked,
+                   int64_t now_us, int64_t next_us) {
+    return (playback_page || sleeping || wake_pending) && !pairing && connected && time_valid &&
+           authorized && !blocked && now_us >= next_us;
+}
+
 sr_poll_mode_t sr_effective_poll_mode(sr_poll_mode_t selected, bool screen_off) {
     if (screen_off) return SR_POLL_SCREEN_OFF;
     return selected == SR_POLL_AUTO ? SR_POLL_QUICK : selected;

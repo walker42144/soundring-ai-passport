@@ -1,2 +1,2 @@
-4779763c1a4b6aac4ce98b2681953c026f307ce7febb6f5e9b119ce44fdc936e  soundring-app.bin
-e0cbdacee1d3a69ef9b9a5646a2a1bfe281ebe5f70fa4a500abd88156557ed2c  soundring-full.bin
+2b987e0fc9ad76c4214f0d41387f6eb4c3134d81201f26fe12e3f163534567f0  soundring-app.bin
+36813c6c20ac5e082b0339839e597b406c3effa2ba2a3f6cd321516865232cbf  soundring-full.bin

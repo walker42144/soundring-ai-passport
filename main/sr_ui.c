@@ -21,7 +21,8 @@ enum {
     LINE = 0x343b36,
     RED = 0xff7777
 };
-static lv_obj_t *root, *status, *footer, *toast;
+static lv_obj_t *root, *brand, *status, *footer, *toast;
+static lv_obj_t *progress_edge;
 static lv_obj_t *art, *art_placeholder, *title, *artist, *device, *bar, *elapsed, *duration, *flags,
     *playing;
 static lv_obj_t *page, *rows[SR_VIEW_ROWS], *row_title[SR_VIEW_ROWS], *row_sub[SR_VIEW_ROWS],
@@ -36,6 +37,7 @@ static unsigned ambient_phase;
 static int ambient_current[3] = {16, 39, 25};
 static int ambient_target[3] = {16, 39, 25};
 static uint32_t ambient_drawn = 0xffffffff;
+static int32_t elapsed_second = -1;
 
 static bool font_has_glyph(uint32_t cp, void *context) {
     lv_font_glyph_dsc_t glyph = {0};
@@ -51,19 +53,31 @@ static void set_metadata(lv_obj_t *label, const char *value, const lv_font_t *fo
 
 static void progress_tick(lv_timer_t *timer) {
     (void)timer;
-    if (current != SR_SC_HOME || !bar || !elapsed || !progress_snapshot.initialized) return;
+    if ((current != SR_SC_HOME && current != SR_SC_IMMERSIVE) || !bar || !elapsed || !progress_snapshot.initialized) return;
     int32_t pos = sr_progress_position(&progress_snapshot, esp_timer_get_time());
     int32_t total = (int32_t)progress_snapshot.duration_ms;
     if (total <= 0) return;
     lv_bar_set_value(bar, (int)((int64_t)pos * 1000 / total), LV_ANIM_OFF);
-    char buf[24];
-    sr_format_time(pos, buf, sizeof(buf));
-    lv_label_set_text(elapsed, buf);
+    if (current == SR_SC_IMMERSIVE && progress_edge) {
+        int64_t scaled = (int64_t)pos * 204 * 256 / total;
+        int x = (int)(scaled / 256);
+        if (x < 204) {
+            lv_obj_set_x(progress_edge, 18 + x);
+            lv_obj_set_style_bg_opa(progress_edge, (lv_opa_t)(scaled % 256), 0);
+            lv_obj_remove_flag(progress_edge, LV_OBJ_FLAG_HIDDEN);
+        } else lv_obj_add_flag(progress_edge, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (pos / 1000 != elapsed_second) {
+        char buf[24];
+        sr_format_time(pos, buf, sizeof(buf));
+        lv_label_set_text(elapsed, buf);
+        elapsed_second = pos / 1000;
+    }
 }
 
 static void ambient_tick(lv_timer_t *timer) {
     (void)timer;
-    if (current != SR_SC_HOME || !ambient_glow) return;
+    if ((current != SR_SC_HOME && current != SR_SC_IMMERSIVE) || !ambient_glow) return;
     // Fade between covers, with a slow, restrained brightness cycle.
     for (int i = 0; i < 3; ++i) {
         int delta = ambient_target[i] - ambient_current[i];
@@ -87,11 +101,12 @@ void sr_ui_pause_progress(void) {
 }
 
 static void reset_refs(void) {
-    status = footer = toast = art = art_placeholder = title = artist = device = bar = elapsed =
+    brand = status = footer = toast = art = art_placeholder = title = artist = device = bar = elapsed =
         duration = flags = playing = NULL;
     page = value = value_sub = value_hint = value_bar = NULL;
-    ambient_glow = NULL;
+    ambient_glow = progress_edge = NULL;
     ambient_drawn = 0xffffffff;
+    elapsed_second = -1;
     memset(rows, 0, sizeof(rows));
     memset(row_title, 0, sizeof(row_title));
     memset(row_sub, 0, sizeof(row_sub));
@@ -170,8 +185,8 @@ static const char *home_hint(const sr_view_t *v) {
     return "双击收藏 · 长按确定菜单";
 }
 static void common(void) {
-    text(root, "SOUNDRING", &lv_font_montserrat_14, ACCENT, 14, 5, 100, 18, LV_TEXT_ALIGN_LEFT);
-    status = text(root, "", &sr_font_14, MUTED, 115, 4, 111, 18, LV_TEXT_ALIGN_RIGHT);
+    brand = text(root, "SOUNDRING", &lv_font_montserrat_14, ACCENT, 14, 5, 100, 18, LV_TEXT_ALIGN_LEFT);
+    status = text(root, "", &sr_font_14, MUTED, 115, 5, 111, 18, LV_TEXT_ALIGN_RIGHT);
     footer = text(root, "", &sr_font_14, MUTED, 8, 300, 224, 18, LV_TEXT_ALIGN_CENTER);
     toast = text(root, "", &sr_font_14, ACCENT, 8, 300, 224, 18, LV_TEXT_ALIGN_CENTER);
     show(toast, false);
@@ -183,18 +198,40 @@ static void home(const sr_view_t *v) {
          LV_TEXT_ALIGN_CENTER);
     art = lv_image_create(root);
     show(art, false);
-    title = text(root, "", &sr_font_20, TEXT, 16, 144, 208, 52, LV_TEXT_ALIGN_CENTER);
+    title = text(root, "", &sr_font_20, TEXT, 16, 152, 208, 52, LV_TEXT_ALIGN_CENTER);
     lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
-    artist = text(root, "", &sr_font_14, MUTED, 16, 197, 208, 18, LV_TEXT_ALIGN_CENTER);
-    device = text(root, "", &sr_font_14, ACCENT, 16, 217, 208, 18, LV_TEXT_ALIGN_CENTER);
-    bar = progress(root, 18, 239, 204);
+    artist = text(root, "", &sr_font_14, MUTED, 16, 205, 208, 18, LV_TEXT_ALIGN_CENTER);
+    device = text(root, "", &sr_font_14, ACCENT, 16, 225, 208, 18, LV_TEXT_ALIGN_CENTER);
+    bar = progress(root, 18, 248, 204);
     elapsed =
-        text(root, "0:00", &lv_font_montserrat_14, MUTED, 18, 249, 75, 18, LV_TEXT_ALIGN_LEFT);
+        text(root, "0:00", &lv_font_montserrat_14, MUTED, 18, 258, 75, 18, LV_TEXT_ALIGN_LEFT);
     duration =
-        text(root, "0:00", &lv_font_montserrat_14, MUTED, 147, 249, 75, 18, LV_TEXT_ALIGN_RIGHT);
-    flags = text(root, "", &sr_font_14, MUTED, 14, 271, 212, 18, LV_TEXT_ALIGN_CENTER);
-    playing = text(root, LV_SYMBOL_PLAY, &lv_font_montserrat_14, ACCENT, 102, 250, 36, 18,
+        text(root, "0:00", &lv_font_montserrat_14, MUTED, 147, 258, 75, 18, LV_TEXT_ALIGN_RIGHT);
+    flags = text(root, "", &sr_font_14, MUTED, 14, 279, 212, 18, LV_TEXT_ALIGN_CENTER);
+    playing = text(root, LV_SYMBOL_PLAY, &lv_font_montserrat_14, ACCENT, 102, 258, 36, 18,
                    LV_TEXT_ALIGN_CENTER);
+}
+static void immersive(void) {
+    art_placeholder = box(root, 34, 12, 172, 172, CARD, 9);
+    text(art_placeholder, LV_SYMBOL_AUDIO, &lv_font_montserrat_14, MUTED, 0, 75, 172, 18, LV_TEXT_ALIGN_CENTER);
+    art = lv_image_create(root);
+    show(art, false);
+    title = text(root, "", &sr_font_20, TEXT, 14, 190, 212, 52, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
+    artist = text(root, "", &sr_font_14, MUTED, 16, 244, 208, 18, LV_TEXT_ALIGN_CENTER);
+    bar = progress(root, 18, 271, 204);
+    lv_obj_set_height(bar, 9);
+    progress_edge = box(root, 18, 271, 1, 9, ACCENT, 0);
+    elapsed = text(root, "0:00", &lv_font_montserrat_14, MUTED, 18, 288, 75, 18, LV_TEXT_ALIGN_LEFT);
+    duration = text(root, "0:00", &lv_font_montserrat_14, MUTED, 147, 288, 75, 18, LV_TEXT_ALIGN_RIGHT);
+}
+static void device_status(void) {
+    text(root, "设备状态", &sr_font_20, TEXT, 14, 28, 160, 26, LV_TEXT_ALIGN_LEFT);
+    page = text(root, "", &lv_font_montserrat_14, MUTED, 175, 32, 50, 18, LV_TEXT_ALIGN_RIGHT);
+    for (int i = 0; i < SR_VIEW_ROWS; i++) {
+        rows[i] = box(root, 10, 57 + i * 39, 220, 36, CARD, 6);
+        row_title[i] = text(rows[i], "", &sr_font_14, TEXT, 12, 9, 198, 18, LV_TEXT_ALIGN_LEFT);
+    }
 }
 static void list(const sr_view_t *v) {
     lv_obj_t *heading = text(root, "", &sr_font_20, TEXT, 14, 28, 160, 26, LV_TEXT_ALIGN_LEFT);
@@ -275,7 +312,14 @@ void sr_ui_attach_cover(void) {
     cover_desc.data_size = (uint32_t)w * h * 2;
     cover_desc.data = pixels;
     lv_image_set_src(art, &cover_desc);
-    lv_obj_set_pos(art, 60 + (120 - (int)w) / 2, 28 + (120 - (int)h) / 2);
+    if (current == SR_SC_IMMERSIVE) {
+        lv_image_set_scale(art, 367);
+        lv_obj_set_pos(art, 34 + (172 - (int)w) / 2, 12 + (172 - (int)h) / 2);
+        lv_image_set_pivot(art, w / 2, h / 2);
+    } else {
+        lv_image_set_scale(art, 256);
+        lv_obj_set_pos(art, 60 + (120 - (int)w) / 2, 28 + (120 - (int)h) / 2);
+    }
     show(art, true);
     show(art_placeholder, false);
 }
@@ -285,12 +329,13 @@ void sr_ui_render(const sr_view_t *v, bool rebuild) {
     if (!progress_timer) progress_timer = lv_timer_create(progress_tick, 150, NULL);
     if (!ambient_timer) ambient_timer = lv_timer_create(ambient_tick, 400, NULL);
     if (ambient_timer) {
-        if (v->screen == SR_SC_HOME) lv_timer_resume(ambient_timer);
+        if (v->screen == SR_SC_HOME || v->screen == SR_SC_IMMERSIVE) lv_timer_resume(ambient_timer);
         else lv_timer_pause(ambient_timer);
     }
     if (v->progress) progress_snapshot = *v->progress;
     if (progress_timer) {
-        if (v->screen == SR_SC_HOME && v->connected &&
+        lv_timer_set_period(progress_timer, v->screen == SR_SC_IMMERSIVE ? 80 : 150);
+        if ((v->screen == SR_SC_HOME || v->screen == SR_SC_IMMERSIVE) && v->connected &&
             sr_progress_needs_frames(&progress_snapshot, esp_timer_get_time()))
             lv_timer_resume(progress_timer);
         else
@@ -301,14 +346,20 @@ void sr_ui_render(const sr_view_t *v, bool rebuild) {
             lv_obj_delete(root);
         reset_refs();
         root = box(lv_screen_active(), 0, 0, 240, 320, BG, 0);
-        if (v->screen == SR_SC_HOME) {
-            ambient_glow = box(root, 0, 22, 240, 175, BG, 0);
+        if (v->screen == SR_SC_HOME || v->screen == SR_SC_IMMERSIVE) {
+            ambient_glow = box(root, 0, v->screen == SR_SC_IMMERSIVE ? 0 : 22, 240,
+                               v->screen == SR_SC_IMMERSIVE ? 197 : 175, BG, 0);
             lv_obj_set_style_bg_grad_color(ambient_glow, lv_color_hex(BG), 0);
             lv_obj_set_style_bg_grad_dir(ambient_glow, LV_GRAD_DIR_VER, 0);
         }
         common();
         if (v->screen == SR_SC_HOME)
             home(v);
+        else if (v->screen == SR_SC_IMMERSIVE) {
+            show(brand, false); show(status, false); show(footer, false);
+            immersive();
+        } else if (v->screen == SR_SC_STATUS)
+            device_status();
         else if (is_list(v->screen))
             list(v);
         else if (v->screen == SR_SC_PAIRING)
@@ -330,7 +381,23 @@ void sr_ui_render(const sr_view_t *v, bool rebuild) {
         snprintf(buf, sizeof(buf), "%s", state(v));
     lv_label_set_text(status, buf);
     const char *hint = "长按确定 返回";
-    if (v->screen == SR_SC_HOME) {
+    if (v->screen == SR_SC_IMMERSIVE) {
+        const sr_playback_t *p = v->playback;
+        set_metadata(title, p && p->title[0] ? p->title : "还没有播放", &sr_font_20);
+        set_metadata(artist, p && p->artist[0] ? p->artist : "打开 Spotify 开始播放", &sr_font_14);
+        sr_format_time(v->position_ms, buf, sizeof(buf)); lv_label_set_text(elapsed, buf);
+        sr_format_time(p ? p->duration_ms : -1, buf, sizeof(buf)); lv_label_set_text(duration, buf);
+        sr_ui_attach_cover();
+        progress_tick(NULL);
+    } else if (v->screen == SR_SC_STATUS) {
+        snprintf(buf, sizeof(buf), "%d/2", v->status_page + 1); lv_label_set_text(page, buf);
+        for (int i = 0; i < SR_VIEW_ROWS; i++) {
+            lv_label_set_long_mode(row_title[i], v->status_page == 1 && i == 0
+                                                    ? LV_LABEL_LONG_SCROLL_CIRCULAR : LV_LABEL_LONG_DOT);
+            set_metadata(row_title[i], v->status_lines ? v->status_lines[i] : "", &sr_font_14);
+        }
+        hint = "上下翻页  长按确定返回";
+    } else if (v->screen == SR_SC_HOME) {
         const sr_playback_t *p = v->playback;
         set_metadata(title, p && p->title[0] ? p->title : "还没有播放", &sr_font_20);
         set_metadata(artist, p && p->artist[0] ? p->artist : "打开 Spotify 开始播放", &sr_font_14);
@@ -406,6 +473,6 @@ void sr_ui_render(const sr_view_t *v, bool rebuild) {
     bool has = v->toast && v->toast[0];
     lv_label_set_text(footer, hint);
     lv_label_set_text(toast, has ? v->toast : "");
-    show(footer, !has);
-    show(toast, has);
+    show(footer, v->screen != SR_SC_IMMERSIVE && !has);
+    show(toast, v->screen != SR_SC_IMMERSIVE && has);
 }

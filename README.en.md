@@ -30,3 +30,7 @@ Built with ESP-IDF 5.5.3 and `sdkconfig.defaults`; inspect `partitions.csv` befo
 ## License and privacy
 
 The project is under the [MIT License](LICENSE); bundled third-party code and fonts retain their own licenses. Device-side Wi-Fi credentials and Spotify tokens are stored in unencrypted NVS; protect physical access and do not upload flash backups or logs. See the [English guide](docs/GETTING_STARTED.md) for operating details and limitations.
+
+## Immersive mode and device status
+
+On the home screen, double press Next for immersive mode or Previous for device status. Hold OK to return home; use Up/Down to switch status pages. The screen-off policy schedules playback synchronization approximately once per minute and requests a fresh synchronization on wake, subject to connectivity and Spotify rate limits.

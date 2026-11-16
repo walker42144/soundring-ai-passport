@@ -8,8 +8,11 @@ sr_home_action_t sr_home_action(bsp_btn_t button, bsp_btn_ev_t event) {
         if (button == BSP_BTN_OK)
             return SR_HOME_TOGGLE_PLAY;
     }
-    if (event == BSP_BTN_DOUBLE && button == BSP_BTN_OK)
-        return SR_HOME_TOGGLE_LIKE;
+    if (event == BSP_BTN_DOUBLE) {
+        if (button == BSP_BTN_OK) return SR_HOME_TOGGLE_LIKE;
+        if (button == BSP_BTN_UP) return SR_HOME_STATUS;
+        if (button == BSP_BTN_DOWN) return SR_HOME_IMMERSIVE;
+    }
     if (event == BSP_BTN_LONG) {
         if (button == BSP_BTN_UP)
             return SR_HOME_VOLUME_UP;

@@ -174,5 +174,10 @@ void sr_net_get_status(sr_net_status_t *status) {
     status->connected = s_connected;
     status->time_valid = sr_net_time_valid();
     snprintf(status->ip, sizeof(status->ip), "%s", s_ip);
-    status->rssi = s_rssi;
+    wifi_ap_record_t record;
+    if (s_connected && esp_wifi_sta_get_ap_info(&record) == ESP_OK) {
+        status->rssi = record.rssi;
+        memcpy(status->ssid, record.ssid, sizeof(record.ssid));
+        status->ssid[sizeof(status->ssid) - 1] = '\0';
+    }
 }

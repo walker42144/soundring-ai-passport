@@ -12,6 +12,7 @@ typedef struct {
     bool connected;
     bool time_valid;
     char ip[16];
+    char ssid[33];
     int rssi;
 } sr_net_status_t;
 

@@ -14,6 +14,13 @@ static void check(bool condition, const char *what) {
     }
 }
 
+static void test_heap_percent(void) {
+    check(sr_heap_used_percent(0, 0) == -1, "无内存数据");
+    check(sr_heap_used_percent(0, 100) == 0, "全空闲");
+    check(sr_heap_used_percent(75, 25) == 75, "内存使用占比");
+    check(sr_heap_used_percent(100, 0) == 100, "全占用");
+}
+
 static void test_gate(void) {
     sr_gate_t gate;
     sr_gate_init(&gate, 800000);
@@ -80,6 +87,13 @@ static void test_poll_delay(void) {
     check(sr_poll_delay_ms(start, start, 0, false, 0, SR_POLL_QUICK) == 3000, "快速等待 3s");
     check(sr_poll_delay_ms(start, start, start + 9000000, true, 0, SR_POLL_QUICK) == 9000, "快速模式遵循限流");
     check(sr_poll_delay_ms(start, start, 0, true, 4, SR_POLL_QUICK) == 16000, "快速模式遵循失败退避");
+    check(sr_poll_ready(false, false, true, false, true, true, true, false, 10, 10), "菜单唤醒后立即同步");
+    check(!sr_poll_ready(false, false, true, false, true, true, true, true, 10, 10), "唤醒遵循限流");
+    check(!sr_poll_ready(false, false, true, false, false, true, true, false, 10, 10), "断网不请求");
+    check(!sr_poll_ready(false, false, true, false, true, true, false, false, 10, 10), "授权失败不请求");
+    check(!sr_poll_ready(false, true, false, false, true, true, true, false, 9, 10), "息屏未到时间不请求");
+    check(sr_poll_ready(false, true, false, false, true, true, true, false, 10, 10), "息屏到时间请求");
+    check(!sr_poll_ready(false, false, false, false, true, true, true, false, 10, 10), "普通菜单不持续轮询");
     check(sr_effective_poll_mode(SR_POLL_AUTO, false) == SR_POLL_QUICK, "自动亮屏快速");
     check(sr_effective_poll_mode(SR_POLL_AUTO, true) == SR_POLL_SCREEN_OFF, "自动息屏慢速");
     check(sr_effective_poll_mode(SR_POLL_QUICK, true) == SR_POLL_SCREEN_OFF, "手动快速息屏仍慢速");
@@ -189,6 +203,7 @@ static void test_errors(void) {
 }
 
 int main(void) {
+    test_heap_percent();
     test_gate();
     test_retry_after();
     test_backoff();

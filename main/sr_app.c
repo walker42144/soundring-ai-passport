@@ -47,6 +47,7 @@ typedef struct {
 
 typedef enum {
     JOB_POLL = 0,
+    JOB_WAKE,
     JOB_COMMAND,
     JOB_LIST,
     JOB_COVER,
@@ -100,6 +101,10 @@ static sr_gate_t s_gate;
 static int64_t s_next_poll_us;
 static int64_t s_next_tick_us;   // 首页进度 tick；与网络轮询完全独立
 static int s_poll_failures;
+static bool s_wake_poll_pending;
+static int s_status_page;
+static char s_status_lines[6][64];
+static int64_t s_next_status_us;
 static int64_t s_last_playback_sync_us;
 static bool s_playback_stale;
 static int64_t s_last_key_us;
@@ -171,6 +176,8 @@ static void build_view_locked(sr_view_t *view, bool *rebuild) {
     view->liked = s_liked;
     view->like_known = s_like_known;
     view->playback_stale = s_playback_stale;
+    view->status_lines = s_status_lines;
+    view->status_page = s_status_page;
     view->draft = s_screen == SR_SC_SEEK ? s_seek_draft
                   : s_screen == SR_SC_BRIGHTNESS ? s_brightness_draft
                                                  : s_volume_draft;
@@ -652,6 +659,8 @@ static void handle_home_key_locked(bsp_btn_t btn, bsp_btn_ev_t ev) {
         case SR_HOME_VOLUME_DOWN: adjust_volume_locked(-5); break;
         case SR_HOME_MENU: enter_screen_locked(SR_SC_MENU, "菜单", 0); break;
         case SR_HOME_TOGGLE_LIKE: toggle_like_locked(); break;
+        case SR_HOME_IMMERSIVE: enter_screen_locked(SR_SC_IMMERSIVE, "沉浸模式", 0); s_next_poll_us = esp_timer_get_time(); break;
+        case SR_HOME_STATUS: s_status_page = 0; s_next_status_us = 0; enter_screen_locked(SR_SC_STATUS, "设备状态", 0); break;
         default: break;
     }
 }
@@ -769,7 +778,17 @@ static void handle_value_key_locked(bsp_btn_t btn, bsp_btn_ev_t ev) {
 }
 
 static void handle_key_inner(bsp_btn_t btn, bsp_btn_ev_t ev) {
-    if (s_screen == SR_SC_HOME) {
+    if (s_screen == SR_SC_IMMERSIVE) {
+        if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) go_back_locked();
+        else if (ev != BSP_BTN_DOUBLE || btn == BSP_BTN_OK) handle_home_key_locked(btn, ev);
+    } else if (s_screen == SR_SC_STATUS) {
+        if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) go_back_locked();
+        else if (ev == BSP_BTN_CLICK && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN)) {
+            s_status_page = 1 - s_status_page;
+            s_next_status_us = 0;
+            mark_rebuild();
+        }
+    } else if (s_screen == SR_SC_HOME) {
         handle_home_key_locked(btn, ev);
     } else if (s_screen == SR_SC_VOLUME || s_screen == SR_SC_SEEK ||
                s_screen == SR_SC_BRIGHTNESS) {
@@ -809,6 +828,8 @@ void sr_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         ESP_LOGI(TAG, "唤醒");
         s_force_rebuild = true;
         s_next_poll_us = esp_timer_get_time();
+        s_wake_poll_pending = true;
+        (void)enqueue(JOB_WAKE, 0, 0, NULL, NULL);
         s_next_tick_us = 0;
         render_locked();
         xSemaphoreGiveRecursive(s_mutex);
@@ -854,6 +875,7 @@ static void do_poll(void) {
         return;
     }
     s_poll_failures = 0;
+    s_wake_poll_pending = false;
     s_last_playback_sync_us = esp_timer_get_time();
     s_playback_stale = false;
     s_pb = fresh;
@@ -1043,7 +1065,7 @@ static void idle_tick_locked(void) {
         render_locked();
     }
     if (!s_playback_stale && s_pb.playing && s_last_playback_sync_us > 0 &&
-        (s_screen == SR_SC_HOME || s_display_suspended) &&
+        (s_screen == SR_SC_HOME || s_screen == SR_SC_IMMERSIVE || s_display_suspended) &&
         now - s_last_playback_sync_us >= (s_display_suspended ? 75000000LL : 15000000LL)) {
         int32_t position = sr_progress_position(&s_progress, now);
         s_pb.position_ms = position;
@@ -1062,6 +1084,41 @@ static void idle_tick_locked(void) {
             s_dimmed = true;
             bsp_display_backlight(10);
         }
+    }
+    if (!s_display_suspended && s_screen == SR_SC_STATUS && now >= s_next_status_us) {
+        sr_net_status_t net;
+        sr_net_get_status(&net);
+        int mv = bsp_battery_mv();
+        if (s_battery >= 0) snprintf(s_status_lines[0], 64, "电量  %d%%", s_battery);
+        else snprintf(s_status_lines[0], 64, "电量  不可用");
+        if (mv >= 0) snprintf(s_status_lines[1], 64, "电压  %d mV", mv);
+        else snprintf(s_status_lines[1], 64, "电压  不可用");
+        unsigned long seconds = (unsigned long)((now - s_boot_us) / 1000000);
+        snprintf(s_status_lines[2], 64, "运行  %lu天 %02lu:%02lu", seconds / 86400, (seconds / 3600) % 24, (seconds / 60) % 60);
+        multi_heap_info_t heap;
+        heap_caps_get_info(&heap, MALLOC_CAP_8BIT);
+        int used_pct = sr_heap_used_percent(heap.total_allocated_bytes, heap.total_free_bytes);
+        if (used_pct >= 0)
+            snprintf(s_status_lines[3], 64, "堆内存 %u/%uK %d%%",
+                     (unsigned)(heap.total_allocated_bytes / 1024),
+                     (unsigned)((heap.total_allocated_bytes + heap.total_free_bytes) / 1024), used_pct);
+        else snprintf(s_status_lines[3], 64, "堆内存 不可用");
+        snprintf(s_status_lines[4], 64, "连续 %u/%uK 空闲",
+                 (unsigned)(heap.largest_free_block / 1024),
+                 (unsigned)(heap.total_free_bytes / 1024));
+        snprintf(s_status_lines[5], 64, "亮度  %u%%", (unsigned)(s_dimmed ? 10 : s_saved_brightness));
+        if (s_status_page == 1) {
+            if (net.connected && net.ssid[0]) snprintf(s_status_lines[0], 64, "Wi-Fi  %s", net.ssid);
+            else snprintf(s_status_lines[0], 64, "网络  %s", net.connected ? "名称不可用" : "未连接");
+            if (net.connected && net.rssi) snprintf(s_status_lines[1], 64, "信号  %d dBm", net.rssi);
+            else snprintf(s_status_lines[1], 64, "信号  不可用");
+            snprintf(s_status_lines[2], 64, "IP  %s", net.connected ? net.ip : "--");
+            snprintf(s_status_lines[3], 64, "授权  %s", !sr_store_has_auth(&s_cfg) || s_sp.auth_failed ? "未授权" : "已授权");
+            snprintf(s_status_lines[4], 64, "同步  %s", s_playback_stale ? "待确认" : s_cfg.poll_mode == SR_POLL_AUTO ? "自动" : s_cfg.poll_mode == SR_POLL_QUICK ? "快速" : s_cfg.poll_mode == SR_POLL_NORMAL ? "标准" : "省电");
+            snprintf(s_status_lines[5], 64, "时间  %s", net.time_valid ? "已校准" : "未校准");
+        }
+        s_next_status_us = now + 5000000;
+        render_locked();
     }
     if (now > s_next_battery_us) {
         s_battery = bsp_battery_soc();
@@ -1083,10 +1140,12 @@ static bool poll_due_locked(void) {
     // 429 封禁期内不再发请求：否则每 2 秒撞一次墙、每次都弹提示。
     // 校时完成前不发 HTTPS：证书有效期校验会直接失败，界面却显示成“网络请求失败”，
     // 很容易被误判为 Wi-Fi 故障。
-    return (s_screen == SR_SC_HOME || s_display_suspended) && !sr_pair_active() && sr_net_connected() &&
-           sr_net_time_valid() && sr_store_has_auth(&s_cfg) && !s_sp.auth_failed &&
-           !sr_sp_blocked(&s_sp, esp_timer_get_time()) &&
-           esp_timer_get_time() >= s_next_poll_us;
+    const int64_t now = esp_timer_get_time();
+    return sr_poll_ready(s_screen == SR_SC_HOME || s_screen == SR_SC_IMMERSIVE,
+                         s_display_suspended, s_wake_poll_pending, sr_pair_active(),
+                         sr_net_connected(), sr_net_time_valid(),
+                         sr_store_has_auth(&s_cfg) && !s_sp.auth_failed,
+                         sr_sp_blocked(&s_sp, now), now, s_next_poll_us);
 }
 
 static void worker_task(void *arg) {
@@ -1102,7 +1161,7 @@ static void worker_task(void *arg) {
                 wait_ms = 5000;
                 s_next_tick_us = 0;  // 息屏期间不累积 tick，唤醒后立刻补一帧
             }
-            if (!s_display_suspended && s_screen == SR_SC_HOME) {
+            if (!s_display_suspended && (s_screen == SR_SC_HOME || s_screen == SR_SC_IMMERSIVE)) {
                 if (sr_net_connected()) {
                     // 本地 UI tick：仅重绘文本与进度条，不发请求、不改 s_next_poll_us。
                     const int64_t tick_us = s_pb.playing ? SR_TICK_PLAY_US : SR_TICK_PAUSE_US;
@@ -1142,6 +1201,7 @@ static void worker_task(void *arg) {
 
         if (xQueueReceive(s_jobs, &job, pdMS_TO_TICKS(wait_ms)) != pdTRUE) continue;
         switch (job.kind) {
+            case JOB_WAKE: break;
             case JOB_POLL:
                 do_poll();
                 break;
